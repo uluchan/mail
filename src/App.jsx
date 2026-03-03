@@ -5,6 +5,7 @@ import './App.css'
 import SettingsModal from './components/SettingsModal'
 import MailModal from './components/MailModal'
 import SectorManagementModal from './components/SectorManagementModal'
+import { API_BASE } from './apiConfig'
 import './components/MailModal.css'
 
 function App() {
@@ -113,7 +114,7 @@ function App() {
 
   const fetchSectors = async () => {
     try {
-      const resp = await fetch('http://localhost:3001/api/sectors')
+      const resp = await fetch(`${API_BASE}/sectors`)
       const data = await resp.json()
       if (Array.isArray(data)) {
         setAllSectors(data)
@@ -214,7 +215,7 @@ function App() {
 
   const fetchCustomers = async (page) => {
     try {
-      const resp = await fetch(`http://localhost:3001/api/customers?page=${page}&limit=20`)
+      const resp = await fetch(`${API_BASE}/customers?page=${page}&limit=20`)
       const data = await resp.json()
       if (data && data.data) {
         setCustomers(data.data)
@@ -233,7 +234,7 @@ function App() {
   const saveSelectedToDb = async (resultsToSave) => {
     if (!resultsToSave || resultsToSave.length === 0) return;
     try {
-      const resp = await fetch('http://localhost:3001/api/customers/bulk', {
+      const resp = await fetch(`${API_BASE}/customers/bulk`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(resultsToSave)

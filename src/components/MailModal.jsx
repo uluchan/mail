@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, Send, Mail, Building2, User, FileText } from 'lucide-react';
+import { API_BASE } from '../apiConfig';
 
 const MailModal = ({ customer, onClose, onMailSent, subSectors = [] }) => {
     const [mailContent, setMailContent] = useState('');
@@ -27,7 +28,7 @@ const MailModal = ({ customer, onClose, onMailSent, subSectors = [] }) => {
     const handleSend = async () => {
         setSending(true);
         try {
-            const resp = await fetch(`http://localhost:3001/api/customers/${customer.id}/mail-sent`, {
+            const resp = await fetch(`${API_BASE}/customers/${customer.id}/mail-sent`, {
                 method: 'POST'
             });
             if (resp.ok) {

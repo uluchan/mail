@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react'
-import { X, Plus, Trash2, ChevronRight, Edit3, Save, Layout } from 'lucide-react'
-import './SectorManagementModal.css'
+import React, { useState, useEffect } from 'react';
+import { X, Plus, Trash2, ChevronRight, Edit3, Save, Layout } from 'lucide-react';
+import { API_BASE } from '../apiConfig';
+import './SectorManagementModal.css';
 
 const SectorManagementModal = ({ onClose }) => {
     const [sectors, setSectors] = useState([])
@@ -18,7 +19,7 @@ const SectorManagementModal = ({ onClose }) => {
     const fetchSectors = async () => {
         setLoading(true)
         try {
-            const resp = await fetch('http://localhost:3001/api/sectors')
+            const resp = await fetch(`${API_BASE}/sectors`)
             const data = await resp.json()
             if (Array.isArray(data)) {
                 setSectors(data)
@@ -35,7 +36,7 @@ const SectorManagementModal = ({ onClose }) => {
     const addMainSector = async () => {
         if (!newMainSector.trim()) return
         try {
-            await fetch('http://localhost:3001/api/main-sectors', {
+            await fetch(`${API_BASE}/main-sectors`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: newMainSector })
@@ -48,7 +49,7 @@ const SectorManagementModal = ({ onClose }) => {
     const deleteMainSector = async (id) => {
         if (!confirm('Tüm alt sektörler de silinecek. Emin misiniz?')) return
         try {
-            await fetch(`http://localhost:3001/api/main-sectors/${id}`, { method: 'DELETE' })
+            await fetch(`${API_BASE}/main-sectors/${id}`, { method: 'DELETE' })
             fetchSectors()
         } catch (err) { alert('Hata: ' + err.message) }
     }
@@ -70,7 +71,7 @@ const SectorManagementModal = ({ onClose }) => {
     const saveSubSector = async () => {
         if (!subFormData.name.trim()) return
         const isNew = editingSub.isNew
-        const url = isNew ? 'http://localhost:3001/api/sub-sectors' : `http://localhost:3001/api/sub-sectors/${editingSub.id}`
+        const url = isNew ? `${API_BASE}/sub-sectors` : `${API_BASE}/sub-sectors/${editingSub.id}`
         const method = isNew ? 'POST' : 'PUT'
 
         try {
@@ -92,7 +93,7 @@ const SectorManagementModal = ({ onClose }) => {
     const deleteSubSector = async (id) => {
         if (!confirm('Bu alt sektörü silmek istediğinize emin misiniz?')) return
         try {
-            await fetch(`http://localhost:3001/api/sub-sectors/${id}`, { method: 'DELETE' })
+            await fetch(`${API_BASE}/sub-sectors/${id}`, { method: 'DELETE' })
             fetchSectors()
         } catch (err) { alert('Hata: ' + err.message) }
     }
