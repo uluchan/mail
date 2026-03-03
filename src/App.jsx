@@ -128,7 +128,7 @@ function App() {
 
   const checkDbStatus = async () => {
     try {
-      const response = await fetch('http://localhost:3001/api/db-status')
+      const response = await fetch(`${API_BASE}/db-status`)
       const data = await response.json()
       setDbStatus({
         loading: false,
