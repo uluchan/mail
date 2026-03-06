@@ -2,7 +2,10 @@ import express from 'express';
 import mysql from 'mysql2/promise';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import nodemailer from 'nodemailer';
 import axios from 'axios';
+import { google } from 'googleapis';
+import fs from 'fs';
 
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -11,6 +14,37 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 dotenv.config({ path: path.join(__dirname, '.env') });
+
+// Google OAuth2 Setup
+const oauth2Client = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    process.env.GOOGLE_REDIRECT_URI // Base redirect URI from env
+);
+
+const TOKEN_PATH = path.join(__dirname, 'tokens.json');
+
+// Load tokens from file if exist
+if (fs.existsSync(TOKEN_PATH)) {
+    try {
+        const tokens = JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf-8'));
+        oauth2Client.setCredentials(tokens);
+        console.log('Stored Google tokens loaded.');
+    } catch (err) {
+        console.error('Error loading tokens:', err);
+    }
+}
+
+// Nodemailer fallback transporter
+const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: process.env.SMTP_PORT,
+    secure: process.env.SMTP_PORT === '465',
+    auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+    },
+});
 
 const app = express();
 app.use(cors());
@@ -21,13 +55,21 @@ const dbConfig = {
     user: process.env.DB_USER,
     password: process.env.DB_PASS,
     database: process.env.DB_NAME,
+    timezone: '+03:00' // Local timezone for Turkey
 };
+
+// Helper function to get connection with timezone set
+async function getDbConnection() {
+    const conn = await mysql.createConnection(dbConfig);
+    await conn.execute("SET time_zone = '+03:00'");
+    return conn;
+}
 
 // Check DB Connection
 app.get('/api/db-status', async (req, res) => {
     try {
         // Try specific DB first
-        const connection = await mysql.createConnection(dbConfig);
+        const connection = await getDbConnection();
         await connection.ping();
         await connection.end();
         res.json({ status: 'connected', message: `Successfully connected to database '${process.env.DB_NAME}'` });
@@ -57,7 +99,7 @@ app.get('/api/db-status', async (req, res) => {
 // Database Setup Function
 async function setupDatabase() {
     try {
-        const connection = await mysql.createConnection(dbConfig);
+        const connection = await getDbConnection();
         console.log('Running database setup...');
 
         // Customers table
@@ -74,6 +116,8 @@ async function setupDatabase() {
                 phone VARCHAR(20),
                 authorized_person VARCHAR(255),
                 last_mail_at DATETIME,
+                status VARCHAR(50) DEFAULT 'New Lead',
+                notes TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         `);
@@ -83,6 +127,8 @@ async function setupDatabase() {
         try { await connection.execute('ALTER TABLE customers ADD COLUMN sub_sector_id INT AFTER main_sector_id'); } catch (e) { }
         try { await connection.execute('ALTER TABLE customers ADD COLUMN website VARCHAR(255) AFTER email'); } catch (e) { }
         try { await connection.execute('ALTER TABLE customers ADD COLUMN last_mail_at DATETIME AFTER authorized_person'); } catch (e) { }
+        try { await connection.execute("ALTER TABLE customers ADD COLUMN status VARCHAR(50) DEFAULT 'New Lead' AFTER last_mail_at"); } catch (e) { }
+        try { await connection.execute('ALTER TABLE customers ADD COLUMN notes TEXT AFTER status'); } catch (e) { }
         try { await connection.execute('ALTER TABLE customers ADD UNIQUE INDEX unique_email (email)'); } catch (e) { }
 
         // Optional: Remove old text columns if they exist (safer to keep for now or drop)
@@ -123,7 +169,7 @@ async function setupDatabase() {
 
 app.post('/api/customers/:id/mail-sent', async (req, res) => {
     try {
-        const connection = await mysql.createConnection(dbConfig);
+        const connection = await getDbConnection();
         await connection.execute(
             'UPDATE customers SET last_mail_at = NOW() WHERE id = ?',
             [req.params.id]
@@ -138,7 +184,7 @@ app.post('/api/customers/:id/mail-sent', async (req, res) => {
 // Auto-migrate old text sector data to ID references
 async function migrateLegacySectors() {
     try {
-        const connection = await mysql.createConnection(dbConfig);
+        const connection = await getDbConnection();
         const [toMigrate] = await connection.execute(
             'SELECT id, sector FROM customers WHERE sub_sector_id IS NULL AND sector IS NOT NULL'
         );
@@ -181,7 +227,7 @@ app.get('/api/setup-database', async (req, res) => {
 // Sector Management APIs
 app.get('/api/sectors', async (req, res) => {
     try {
-        const connection = await mysql.createConnection(dbConfig);
+        const connection = await getDbConnection();
         const [mains] = await connection.execute('SELECT * FROM main_sectors ORDER BY name');
         const [subs] = await connection.execute('SELECT * FROM sub_sectors ORDER BY name');
         await connection.end();
@@ -198,7 +244,7 @@ app.get('/api/sectors', async (req, res) => {
 app.post('/api/main-sectors', async (req, res) => {
     try {
         const { name } = req.body;
-        const connection = await mysql.createConnection(dbConfig);
+        const connection = await getDbConnection();
         await connection.execute('INSERT INTO main_sectors (name) VALUES (?)', [name]);
         await connection.end();
         res.json({ status: 'success' });
@@ -207,7 +253,7 @@ app.post('/api/main-sectors', async (req, res) => {
 
 app.delete('/api/main-sectors/:id', async (req, res) => {
     try {
-        const connection = await mysql.createConnection(dbConfig);
+        const connection = await getDbConnection();
         await connection.execute('DELETE FROM main_sectors WHERE id = ?', [req.params.id]);
         await connection.end();
         res.json({ status: 'success' });
@@ -217,7 +263,7 @@ app.delete('/api/main-sectors/:id', async (req, res) => {
 app.post('/api/sub-sectors', async (req, res) => {
     try {
         const { main_sector_id, name, mail_subject, mail_template } = req.body;
-        const connection = await mysql.createConnection(dbConfig);
+        const connection = await getDbConnection();
         await connection.execute(
             'INSERT INTO sub_sectors (main_sector_id, name, mail_subject, mail_template) VALUES (?, ?, ?, ?)',
             [main_sector_id, name, mail_subject, mail_template]
@@ -230,7 +276,7 @@ app.post('/api/sub-sectors', async (req, res) => {
 app.put('/api/sub-sectors/:id', async (req, res) => {
     try {
         const { name, mail_subject, mail_template } = req.body;
-        const connection = await mysql.createConnection(dbConfig);
+        const connection = await getDbConnection();
         await connection.execute(
             'UPDATE sub_sectors SET name = ?, mail_subject = ?, mail_template = ? WHERE id = ?',
             [name, mail_subject, mail_template, req.params.id]
@@ -242,7 +288,7 @@ app.put('/api/sub-sectors/:id', async (req, res) => {
 
 app.delete('/api/sub-sectors/:id', async (req, res) => {
     try {
-        const connection = await mysql.createConnection(dbConfig);
+        const connection = await getDbConnection();
         await connection.execute('DELETE FROM sub_sectors WHERE id = ?', [req.params.id]);
         await connection.end();
         res.json({ status: 'success' });
@@ -251,51 +297,79 @@ app.delete('/api/sub-sectors/:id', async (req, res) => {
 
 // Bulk Insert Sectors & Templates
 app.post('/api/sectors/bulk', async (req, res) => {
-    const items = req.body; // Array of { main_sector, sub_sector, mail_template }
+    const items = req.body;
     if (!Array.isArray(items)) return res.status(400).json({ error: 'Expected an array' });
 
+    console.log(`[BulkSectors] Starting import of ${items.length} items...`);
+    const connection = await getDbConnection();
+
     try {
-        const connection = await mysql.createConnection(dbConfig);
+        let updated = 0;
+        let created = 0;
 
         for (const item of items) {
-            if (!item.main_sector || !item.sub_sector) continue;
+            const mainName = (item.main_sector || '').trim();
+            const subName = (item.sub_sector || '').trim();
+            const mailSubject = (item.mail_subject || '').trim();
+            const mailTemplate = (item.mail_template || '').trim();
+
+            if (!mainName || !subName) continue;
 
             // 1. Get or Create Main Sector
-            let [mains] = await connection.execute('SELECT id FROM main_sectors WHERE name = ?', [item.main_sector]);
+            let [mains] = await connection.execute('SELECT id FROM main_sectors WHERE LOWER(TRIM(name)) = LOWER(?)', [mainName]);
             let mainId;
 
             if (mains.length === 0) {
-                const [result] = await connection.execute('INSERT INTO main_sectors (name) VALUES (?)', [item.main_sector]);
+                console.log(`[BulkSectors] Creating Main Sector: "${mainName}"`);
+                const [result] = await connection.execute('INSERT INTO main_sectors (name) VALUES (?)', [mainName]);
                 mainId = result.insertId;
             } else {
                 mainId = mains[0].id;
+                // Update main sector name to match Excel exactly (fix capitalization/spaces)
+                await connection.execute('UPDATE main_sectors SET name = ? WHERE id = ?', [mainName, mainId]);
             }
 
             // 2. Get, Create or Update Sub Sector
             let [subs] = await connection.execute(
-                'SELECT id FROM sub_sectors WHERE main_sector_id = ? AND name = ?',
-                [mainId, item.sub_sector]
+                'SELECT id FROM sub_sectors WHERE main_sector_id = ? AND LOWER(TRIM(name)) = LOWER(?)',
+                [mainId, subName]
             );
 
             if (subs.length > 0) {
-                // Update existing record with new template/subject
+                console.log(`[BulkSectors] Updating Sub Sector: "${subName}" under "${mainName}"`);
                 await connection.execute(
-                    'UPDATE sub_sectors SET mail_subject = ?, mail_template = ? WHERE id = ?',
-                    [item.mail_subject || '', item.mail_template || '', subs[0].id]
+                    'UPDATE sub_sectors SET name = ?, mail_subject = ?, mail_template = ? WHERE id = ?',
+                    [subName, mailSubject, mailTemplate, subs[0].id]
                 );
+                updated++;
             } else {
-                // Create new record
+                console.log(`[BulkSectors] Creating Sub Sector: "${subName}" under "${mainName}"`);
                 await connection.execute(
                     'INSERT INTO sub_sectors (main_sector_id, name, mail_subject, mail_template) VALUES (?, ?, ?, ?)',
-                    [mainId, item.sub_sector, item.mail_subject || '', item.mail_template || '']
+                    [mainId, subName, mailSubject, mailTemplate]
                 );
+                created++;
             }
         }
 
-        await connection.end();
-        res.json({ status: 'success', message: 'Bulk import complete' });
+        console.log(`[BulkSectors] Finished. Updated: ${updated}, Created: ${created}`);
+        res.json({ status: 'success', message: `${updated} sektör güncellendi, ${created} yeni sektör eklendi.` });
     } catch (error) {
-        console.error('Bulk Sector Import Error:', error);
+        console.error('[BulkSectors] Error:', error);
+        res.status(500).json({ error: error.message });
+    } finally {
+        await connection.end();
+    }
+});
+
+// Get all unique cities for filtering
+app.get('/api/cities', async (req, res) => {
+    try {
+        const connection = await getDbConnection();
+        const [rows] = await connection.execute('SELECT DISTINCT city FROM customers WHERE city IS NOT NULL AND city != "" ORDER BY city ASC');
+        await connection.end();
+        res.json(rows.map(r => r.city));
+    } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
@@ -306,11 +380,43 @@ app.get('/api/customers', async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const offset = (page - 1) * limit;
 
-    try {
-        const connection = await mysql.createConnection(dbConfig);
+    const { city, district, main_sector_id, sub_sector_id, search } = req.query;
 
-        // Get total count for pagination
-        const [countResult] = await connection.execute('SELECT COUNT(*) as total FROM customers');
+    try {
+        const connection = await getDbConnection();
+
+        let whereClauses = [];
+        let params = [];
+
+        if (city) {
+            whereClauses.push("c.city = ?");
+            params.push(city);
+        }
+        if (district) {
+            whereClauses.push("c.district = ?");
+            params.push(district);
+        }
+        if (main_sector_id) {
+            whereClauses.push("c.main_sector_id = ?");
+            params.push(main_sector_id);
+        }
+        if (sub_sector_id) {
+            whereClauses.push("c.sub_sector_id = ?");
+            params.push(sub_sector_id);
+        }
+        if (search) {
+            whereClauses.push("(c.company_name LIKE ? OR c.email LIKE ? OR c.authorized_person LIKE ? OR c.city LIKE ? OR c.district LIKE ? OR c.website LIKE ?)");
+            const searchParam = `%${search}%`;
+            params.push(searchParam, searchParam, searchParam, searchParam, searchParam, searchParam);
+        }
+
+        const whereSql = whereClauses.length > 0 ? "WHERE " + whereClauses.join(" AND ") : "";
+
+        // Get total count for pagination with filters
+        const [countResult] = await connection.execute(
+            `SELECT COUNT(*) as total FROM customers c ${whereSql}`,
+            params
+        );
         const total = countResult[0].total;
 
         // Get paginated data with JOINs + fallback for legacy text data
@@ -322,10 +428,14 @@ app.get('/api/customers', async (req, res) => {
             FROM customers c
             LEFT JOIN main_sectors ms ON c.main_sector_id = ms.id
             LEFT JOIN sub_sectors ss ON c.sub_sector_id = ss.id
+            ${whereSql}
             ORDER BY c.created_at DESC 
             LIMIT ? OFFSET ?
         `;
-        const [rows] = await connection.execute(query, [limit.toString(), offset.toString()]);
+
+        // Add limit and offset to params for the actual data query
+        const dataParams = [...params, limit.toString(), offset.toString()];
+        const [rows] = await connection.execute(query, dataParams);
 
         await connection.end();
         res.json({
@@ -342,21 +452,249 @@ app.get('/api/customers', async (req, res) => {
     }
 });
 
+// Single Customer Management
+app.post('/api/customers', async (req, res) => {
+    try {
+        const { company_name, main_sector_id, sub_sector_id, email, website, city, district, phone, authorized_person, last_mail_at, status, notes } = req.body;
+        const connection = await getDbConnection();
+        await connection.execute(
+            `INSERT INTO customers (
+                company_name, main_sector_id, sub_sector_id, email, website, city, district, phone, authorized_person, last_mail_at, status, notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [company_name, main_sector_id, sub_sector_id, email, website, city, district, phone, authorized_person, last_mail_at || null, status || 'New Lead', notes || null]
+        );
+        await connection.end();
+        res.json({ status: 'success', message: 'Müşteri başarıyla eklendi.' });
+    } catch (error) {
+        if (error.code === 'ER_DUP_ENTRY') {
+            return res.status(400).json({ error: 'Bu email adresi zaten kayıtlı.' });
+        }
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.put('/api/customers/:id', async (req, res) => {
+    try {
+        const { company_name, main_sector_id, sub_sector_id, email, website, city, district, phone, authorized_person, last_mail_at, status, notes } = req.body;
+        const connection = await getDbConnection();
+        await connection.execute(
+            `UPDATE customers SET 
+                company_name = ?, main_sector_id = ?, sub_sector_id = ?, 
+                email = ?, website = ?, city = ?, district = ?, 
+                phone = ?, authorized_person = ?, last_mail_at = ?,
+                status = ?, notes = ?
+            WHERE id = ?`,
+            [
+                company_name, main_sector_id, sub_sector_id, email, website, city, district, phone, authorized_person,
+                last_mail_at || null, status || 'New Lead', notes || null, req.params.id
+            ]
+        );
+        await connection.end();
+        res.json({ status: 'success', message: 'Müşteri bilgileri güncellendi.' });
+    } catch (error) {
+        if (error.code === 'ER_DUP_ENTRY') {
+            return res.status(400).json({ error: 'Bu email adresi zaten başka bir müşteri tarafından kullanılıyor.' });
+        }
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.patch('/api/customers/:id/status', async (req, res) => {
+    try {
+        const { status } = req.body;
+        const connection = await getDbConnection();
+        await connection.execute(
+            'UPDATE customers SET status = ? WHERE id = ?',
+            [status || 'New Lead', req.params.id]
+        );
+        await connection.end();
+        res.json({ status: 'success', message: 'Müşteri durumu güncellendi.' });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Google Auth Endpoints
+app.get('/api/auth/google/url', (req, res) => {
+    const { redirectUri } = req.query;
+
+    // Create a temporary client if redirectUri is provided to avoid changing global state
+    const client = redirectUri ? new google.auth.OAuth2(
+        process.env.GOOGLE_CLIENT_ID,
+        process.env.GOOGLE_CLIENT_SECRET,
+        redirectUri
+    ) : oauth2Client;
+
+    const url = client.generateAuthUrl({
+        access_type: 'offline',
+        scope: [
+            'https://www.googleapis.com/auth/gmail.send',
+            'https://www.googleapis.com/auth/userinfo.email'
+        ],
+        prompt: 'consent' // Force refresh token
+    });
+    res.json({ url });
+});
+
+app.get('/api/auth/google/callback', async (req, res) => {
+    const { code } = req.query;
+    try {
+        const { tokens } = await oauth2Client.getToken(code);
+        oauth2Client.setCredentials(tokens);
+        fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens));
+        res.send('<h1>Başarıyla bağlandı!</h1><p>Şimdi uygulamaya geri dönebilirsiniz. Bu pencereyi kapatabilirsiniz.</p><script>window.close()</script>');
+    } catch (error) {
+        console.error('Callback error:', error);
+        res.status(500).send('Bağlantı sırasında hata oluştu.');
+    }
+});
+
+app.get('/api/auth/google/status', async (req, res) => {
+    try {
+        if (!oauth2Client.credentials || !oauth2Client.credentials.refresh_token) {
+            return res.json({ authenticated: false });
+        }
+
+        const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+        const userInfo = await oauth2.userinfo.get();
+        res.json({ authenticated: true, email: userInfo.data.email });
+    } catch (error) {
+        res.json({ authenticated: false });
+    }
+});
+
+app.post('/api/auth/google/logout', (req, res) => {
+    try {
+        oauth2Client.setCredentials({});
+        if (fs.existsSync(TOKEN_PATH)) {
+            fs.unlinkSync(TOKEN_PATH);
+        }
+        res.json({ status: 'success', message: 'Google oturumu kapatıldı.' });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Real Email Sending Endpoint
+app.post('/api/send-email', async (req, res) => {
+    const { to, subject, html, customerId } = req.body;
+
+    if (!to || !subject || !html) {
+        return res.status(400).json({ error: 'Eksik bilgi: to, subject veya html gerekli.' });
+    }
+
+    try {
+        let messageId;
+
+        // Try Gmail API if authenticated
+        if (oauth2Client.credentials && oauth2Client.credentials.refresh_token) {
+            const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+            const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
+            const messageParts = [
+                `To: ${to}`,
+                'Content-Type: text/html; charset=utf-8',
+                'MIME-Version: 1.0',
+                `Subject: ${utf8Subject}`,
+                '',
+                html,
+            ];
+            const message = messageParts.join('\n');
+            const encodedMessage = Buffer.from(message)
+                .toString('base64')
+                .replace(/\+/g, '-')
+                .replace(/\//g, '_')
+                .replace(/=+$/, '');
+
+            const response = await gmail.users.messages.send({
+                userId: 'me',
+                requestBody: { raw: encodedMessage },
+            });
+            messageId = response.data.id;
+        } else {
+            // Fallback to SMTP
+            const info = await transporter.sendMail({
+                from: process.env.SMTP_FROM,
+                to,
+                subject,
+                html,
+            });
+            messageId = info.messageId;
+        }
+
+        console.log('Email sent: ' + messageId);
+
+        // Update last_mail_at if customerId is provided
+        if (customerId) {
+            const connection = await getDbConnection();
+            await connection.execute(
+                'UPDATE customers SET last_mail_at = NOW() WHERE id = ?',
+                [customerId]
+            );
+            await connection.end();
+        }
+
+        res.json({ status: 'success', message: 'E-posta başarıyla gönderildi.', messageId });
+    } catch (error) {
+        console.error('Email send error:', error);
+        res.status(500).json({ error: 'E-posta gönderilemedi: ' + error.message });
+    }
+});
+
+// Mark as Mail Sent (Legacy / Manual Marker)
+app.post('/api/customers/:id/mail-sent', async (req, res) => {
+    try {
+        const connection = await getDbConnection();
+        await connection.execute(
+            'UPDATE customers SET last_mail_at = NOW() WHERE id = ?',
+            [req.params.id]
+        );
+        await connection.end();
+        res.json({ status: 'success', message: 'Mail gönderildi olarak işaretlendi.' });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.delete('/api/customers/:id', async (req, res) => {
+    try {
+        const connection = await getDbConnection();
+        await connection.execute('DELETE FROM customers WHERE id = ?', [req.params.id]);
+        await connection.end();
+        res.json({ status: 'success', message: 'Müşteri silindi.' });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Bulk Insert Customers
 app.post('/api/customers/bulk', async (req, res) => {
     const customers = req.body; // Expecting an array
     if (!Array.isArray(customers)) return res.status(400).json({ error: 'Expected an array' });
 
     try {
-        const connection = await mysql.createConnection(dbConfig);
+        const connection = await getDbConnection();
 
         // Use INSERT IGNORE to skip duplicates (requires UNIQUE constraint on email)
         const query = `
-            INSERT IGNORE INTO customers (company_name, main_sector_id, sub_sector_id, email, website, city, district, phone, authorized_person)
-            VALUES ?
+            INSERT IGNORE INTO customers (
+                company_name, main_sector_id, sub_sector_id, 
+                main_sector, sector, email, website, 
+                city, district, phone, authorized_person
+            ) VALUES ?
         `;
+
         const values = customers.map(c => [
-            c.company_name, c.main_sector_id, c.sub_sector_id, c.email, c.website, c.city, c.district, c.phone, c.authorized_person
+            c.company_name || 'İsimsiz Şirket',
+            c.main_sector_id || null,
+            c.sub_sector_id || null,
+            c.main_sector || null,
+            c.sector || null,
+            c.email || null,
+            c.website || null,
+            c.city || null,
+            c.district || null,
+            c.phone || null,
+            c.authorized_person || null
         ]);
 
         const [result] = await connection.query(query, [values]);
@@ -376,7 +714,7 @@ app.post('/api/customers/bulk', async (req, res) => {
 // Migrate old text-based sector data to ID-based references
 app.post('/api/customers/migrate-sectors', async (req, res) => {
     try {
-        const connection = await mysql.createConnection(dbConfig);
+        const connection = await getDbConnection();
 
         // Get all customers without sector IDs but with old text
         const [toMigrate] = await connection.execute(

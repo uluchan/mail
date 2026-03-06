@@ -16,8 +16,16 @@ const MailModal = ({ customer, onClose, onMailSent, subSectors = [] }) => {
             );
 
             if (matchingSub && (matchingSub.mail_template || matchingSub.mail_subject)) {
-                setSubject(matchingSub.mail_subject || `${customer.company_name} - İş Birliği Teklifi`);
-                setMailContent(matchingSub.mail_template || '');
+                let finalSubject = matchingSub.mail_subject || `${customer.company_name} - İş Birliği Teklifi`;
+                let finalContent = matchingSub.mail_template || '';
+
+                // Replace placeholders
+                const companyName = customer.company_name || 'Değerli Firma';
+                finalSubject = finalSubject.replace(/{{Firma_Adı}}/g, companyName);
+                finalContent = finalContent.replace(/{{Firma_Adı}}/g, companyName);
+
+                setSubject(finalSubject);
+                setMailContent(finalContent);
             } else {
                 setSubject(`İş Birliği Teklifi`);
                 setMailContent(`Sayın Yetkili,\n\n${customer.company_name} firması ile yazılım danışmanlığı süreçleri hakkında görüşmek istiyoruz.\n\nİyi çalışmalar.`);
@@ -26,15 +34,32 @@ const MailModal = ({ customer, onClose, onMailSent, subSectors = [] }) => {
     }, [customer, subSectors]);
 
     const handleSend = async () => {
+        if (!customer.email) {
+            alert('Müşterinin e-posta adresi bulunamadı.');
+            return;
+        }
+
         setSending(true);
         try {
-            const resp = await fetch(`${API_BASE}/customers/${customer.id}/mail-sent`, {
-                method: 'POST'
+            const resp = await fetch(`${API_BASE}/send-email`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    to: customer.email,
+                    subject: subject,
+                    html: mailContent.replace(/\n/g, '<br>'), // Simple newline to break conversion
+                    customerId: customer.id
+                })
             });
+
+            const data = await resp.json();
+
             if (resp.ok) {
-                alert('Mail gönderildi olarak işaretlendi!');
+                alert('E-posta başarıyla gönderildi!');
                 if (onMailSent) onMailSent();
                 onClose();
+            } else {
+                throw new Error(data.error || 'Gönderim sırasında bir hata oluştu.');
             }
         } catch (err) {
             alert('Hata: ' + err.message);

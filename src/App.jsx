@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react'
-import { Settings, ChevronDown, Activity, Cpu, Zap, AlertCircle, RefreshCw, Sparkles, Plus, Database, ChevronLeft, ChevronRight, CheckCircle, Mail as MailIcon, Layout, Search } from 'lucide-react'
+import { MessageSquare, Settings, ChevronDown, Activity, Cpu, Zap, AlertCircle, RefreshCw, Sparkles, Plus, Database, ChevronLeft, ChevronRight, CheckCircle, Mail as MailIcon, Layout, Search, Menu, X, Send, LogOut } from 'lucide-react'
 import { GoogleGenerativeAI } from "@google/generative-ai"
 import './App.css'
 import SettingsModal from './components/SettingsModal'
 import MailModal from './components/MailModal'
 import SectorManagementModal from './components/SectorManagementModal'
+import CustomerModal from './components/CustomerModal'
 import { API_BASE } from './apiConfig'
 import './components/MailModal.css'
+import { Pencil, Trash2 } from 'lucide-react'
 
 function App() {
   console.log("App rendering...");
@@ -14,19 +16,26 @@ function App() {
   const [isSectorModalOpen, setIsSectorModalOpen] = useState(false)
   const [isSectorDropdownOpen, setIsSectorDropdownOpen] = useState(false)
   const [selectedMailCustomer, setSelectedMailCustomer] = useState(null)
+  const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false)
+  const [selectedCustomerForEdit, setSelectedCustomerForEdit] = useState(null)
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '')
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true)
+  const [googleStatus, setGoogleStatus] = useState({ authenticated: false, email: '' })
+  const [selectedCustomers, setSelectedCustomers] = useState(new Set())
+  const [bulkSending, setBulkSending] = useState({ active: false, current: 0, total: 0, status: '' })
 
   // Sectors state for global use
   const [allSectors, setAllSectors] = useState([])
+  const [allCities, setAllCities] = useState([])
 
   // App State
-  const [searchFilter, setSearchFilter] = useState('')
   const [services, setServices] = useState([])
   const [selectedService, setSelectedService] = useState(null)
   const [isDropdownOpen, setIsDropdownOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [dbStatus, setDbStatus] = useState({ loading: true, connected: false, message: '' })
+  const [customerFilters, setCustomerFilters] = useState({ city: '', mainSectorId: '', subSectorId: '', search: '' })
 
   // Search Parameters & Results
   const [searchParams, setSearchParams] = useState({ city: '', district: '', sector: '', mainSector: '' })
@@ -40,6 +49,7 @@ function App() {
 
   // Customer List State (Pagination)
   const [customers, setCustomers] = useState([])
+  const [isCustomersLoading, setIsCustomersLoading] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
   const [pagination, setPagination] = useState({ totalPages: 0, total: 0 })
 
@@ -90,11 +100,67 @@ function App() {
     checkDbStatus()
     fetchCustomers(1)
     fetchSectors()
+    fetchCities()
+    checkGoogleStatus()
   }, [])
+
+  const checkGoogleStatus = async () => {
+    try {
+      const resp = await fetch(`${API_BASE}/auth/google/status`)
+      const data = await resp.json()
+      setGoogleStatus(data)
+    } catch (err) {
+      console.error("Google status check failed:", err)
+    }
+  }
+
+  const handleGoogleLogin = async () => {
+    try {
+      const currentOrigin = window.location.origin;
+      const redirectUri = currentOrigin.includes('localhost')
+        ? 'http://localhost:3001/api/auth/google/callback'
+        : 'https://mail-git-main-uluchan-4854s-projects.vercel.app/api/auth/google/callback';
+
+      const resp = await fetch(`${API_BASE}/auth/google/url?redirectUri=${encodeURIComponent(redirectUri)}`)
+      const { url } = await resp.json()
+      const width = 600, height = 700;
+      const left = (window.innerWidth / 2) - (width / 2);
+      const top = (window.innerHeight / 2) - (height / 2);
+      const authWindow = window.open(url, 'Google Login', `width=${width},height=${height},left=${left},top=${top}`);
+
+      const checkInterval = setInterval(() => {
+        if (authWindow.closed) {
+          clearInterval(checkInterval);
+          checkGoogleStatus();
+        }
+      }, 1000);
+    } catch (err) {
+      alert("Google login failed: " + err.message)
+    }
+  }
+
+  const handleGoogleLogout = async () => {
+    if (!confirm("Google oturumunu kapatmak istediğinize emin misiniz?")) return;
+    try {
+      const resp = await fetch(`${API_BASE}/auth/google/logout`, { method: 'POST' });
+      if (resp.ok) {
+        setGoogleStatus({ authenticated: false, email: '' });
+      }
+    } catch (err) {
+      console.error("Logout failed:", err);
+    }
+  }
 
   useEffect(() => {
     if (apiKey) fetchRealServices(apiKey)
   }, [apiKey])
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetchCustomers(1, customerFilters)
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [customerFilters])
 
   // Handle click outside for dropdowns
   useEffect(() => {
@@ -124,6 +190,16 @@ function App() {
     } catch (err) {
       setAllSectors([])
     }
+  }
+
+  const fetchCities = async () => {
+    try {
+      const resp = await fetch(`${API_BASE}/cities`)
+      const data = await resp.json()
+      if (Array.isArray(data)) {
+        setAllCities(data)
+      }
+    } catch (err) { }
   }
 
   const checkDbStatus = async () => {
@@ -213,9 +289,18 @@ function App() {
     }
   }
 
-  const fetchCustomers = async (page) => {
+  const fetchCustomers = async (page, filters = customerFilters) => {
+    setIsCustomersLoading(true)
     try {
-      const resp = await fetch(`${API_BASE}/customers?page=${page}&limit=20`)
+      const { city, mainSectorId, subSectorId, search } = filters;
+      let url = `${API_BASE}/customers?page=${page}&limit=20`;
+      if (city) url += `&city=${encodeURIComponent(city)}`;
+      if (mainSectorId) url += `&main_sector_id=${mainSectorId}`;
+      if (subSectorId) url += `&sub_sector_id=${subSectorId}`;
+      if (search) url += `&search=${encodeURIComponent(search)}`;
+
+      console.log("Fetching customers with URL:", url);
+      const resp = await fetch(url)
       const data = await resp.json()
       if (data && data.data) {
         setCustomers(data.data)
@@ -228,6 +313,8 @@ function App() {
     } catch (err) {
       setCustomers([])
       setPagination({ totalPages: 0, total: 0 })
+    } finally {
+      setIsCustomersLoading(false)
     }
   }
 
@@ -237,7 +324,13 @@ function App() {
       const resp = await fetch(`${API_BASE}/customers/bulk`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(resultsToSave)
+        body: JSON.stringify(resultsToSave.map(r => ({
+          ...r,
+          main_sector_id: r.main_sector_id || null,
+          sub_sector_id: r.sub_sector_id || null,
+          main_sector: r.main_sector_name || '', // Legacy support
+          sector: r.sub_sector_name || ''         // Legacy support
+        })))
       });
       const data = await resp.json();
       if (resp.ok) {
@@ -246,6 +339,22 @@ function App() {
       }
     } catch (err) {
       console.error('Save error:', err);
+    }
+  }
+
+  const handleDeleteCustomer = async (id) => {
+    if (!confirm('Bu müşteriyi silmek istediğinize emin misiniz?')) return;
+    try {
+      const resp = await fetch(`${API_BASE}/customers/${id}`, { method: 'DELETE' });
+      const data = await resp.json();
+      if (resp.ok) {
+        alert(data.message);
+        fetchCustomers(currentPage);
+      } else {
+        alert(data.error);
+      }
+    } catch (err) {
+      alert('Silme işlemi sırasında bir hata oluştu.');
     }
   }
 
@@ -490,7 +599,7 @@ function App() {
         setSearchStatus('Web siteleri canlı olarak doğrulanıyor...');
         setSearchProgress(80);
 
-        const verifyResp = await fetch('http://localhost:3001/api/verify-websites', {
+        const verifyResp = await fetch(`${API_BASE}/verify-websites`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ companies: data })
@@ -548,6 +657,74 @@ function App() {
     setSelectedForDb(newSelection)
   }
 
+  const toggleCustomerSelection = (id) => {
+    const newSelection = new Set(selectedCustomers)
+    if (newSelection.has(id)) newSelection.delete(id)
+    else newSelection.add(id)
+    setSelectedCustomers(newSelection)
+  }
+
+  const getMailContent = (customer, subSectors) => {
+    const matchingSub = subSectors.find(s =>
+      s.id === customer.sub_sector_id ||
+      s.name?.toLowerCase() === customer.sub_sector_name?.toLowerCase()
+    );
+
+    let subject = `İş Birliği Teklifi`;
+    let content = `Sayın Yetkili,\n\n${customer.company_name} firması ile yazılım danışmanlığı süreçleri hakkında görüşmek istiyoruz.\n\nİyi çalışmalar.`;
+
+    if (matchingSub && (matchingSub.mail_template || matchingSub.mail_subject)) {
+      const companyName = customer.company_name || 'Değerli Firma';
+      subject = (matchingSub.mail_subject || subject).replace(/{{Firma_Adı}}/g, companyName);
+      content = (matchingSub.mail_template || content).replace(/{{Firma_Adı}}/g, companyName);
+    }
+
+    return { subject, content };
+  }
+
+  const handleBulkMail = async () => {
+    if (selectedCustomers.size === 0) return alert("Lütfen mail gönderilecek müşterileri seçin.");
+    if (!googleStatus.authenticated) return alert("Lütfen önce Google ile Bağlanın.");
+    if (!confirm(`${selectedCustomers.size} seçili müşteriye mailler sırayla gönderilsin mi?`)) return;
+
+    setBulkSending({ active: true, current: 0, total: selectedCustomers.size, status: 'Başlatılıyor...' });
+    const customerList = customers.filter(c => selectedCustomers.has(c.id));
+    const allSubs = (allSectors || []).flatMap(m => m.sub_sectors || []);
+
+    let count = 0;
+    for (const customer of customerList) {
+      count++;
+      setBulkSending(prev => ({ ...prev, current: count, status: `${customer.company_name} - Gönderiliyor...` }));
+
+      const { subject, content } = getMailContent(customer, allSubs);
+
+      try {
+        const resp = await fetch(`${API_BASE}/send-email`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to: customer.email,
+            subject: subject,
+            html: content.replace(/\n/g, '<br>'),
+            customerId: customer.id
+          })
+        });
+
+        if (!resp.ok) console.error(`Failed to send mail to ${customer.email}`);
+
+        // Wait a small bit between sends to avoid rate limits
+        await new Promise(r => setTimeout(r, 1000));
+      } catch (err) {
+        console.error("Bulk send error for", customer.company_name, err);
+      }
+    }
+
+    setBulkSending({ active: false, current: 0, total: 0, status: '' });
+    setSelectedCustomers(new Set());
+    alert("Toplu gönderim tamamlandı.");
+    fetchCustomers(currentPage);
+  }
+
   const saveSelectedToDbFromUi = async () => {
     const toSave = aiResults.filter((_, idx) => selectedForDb.has(idx));
     if (toSave.length === 0) return alert('Lütfen eklenecek şirketleri seçin.');
@@ -573,11 +750,24 @@ function App() {
   })).filter(main => (main.sub_sectors || []).length > 0)
 
   return (
-    <div className="main-layout">
-      {/* Sidebar - Left Section */}
-      <aside className="app-sidebar">
-        <div className="branding">
-          <img src="/logo.png" alt="Oliworks Logo" className="logo-img" />
+    <div className={`main-layout ${isSidebarOpen ? 'sidebar-open' : ''}`}>
+      {/* Sidebar Toggle Button */}
+      <button
+        className={`sidebar-toggle-btn ${isSidebarOpen ? 'sidebar-open' : ''}`}
+        onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+        title={isSidebarOpen ? "Menüyü Kapat" : "Menüyü Aç"}
+      >
+        {isSidebarOpen ? <ChevronLeft size={24} /> : <Menu size={24} />}
+      </button>
+
+      <aside className={`app-sidebar ${isSidebarOpen ? 'show' : ''}`}>
+        <div className="sidebar-header">
+          <div className="branding">
+            <img src="/logo.png" alt="Oliworks Logo" className="logo-img" />
+          </div>
+          <button className="sidebar-close-inner" onClick={() => setIsSidebarOpen(false)} title="Menüyü Kapat">
+            <ChevronLeft size={20} />
+          </button>
         </div>
 
         <div className="sidebar-content">
@@ -590,6 +780,28 @@ function App() {
               <div className={`status-chip ${dbStatus.connected ? 'active' : ''}`}>
                 <Database size={18} strokeWidth={2} /> SQL: {dbStatus.connected ? 'Bağlı' : 'Hata'}
               </div>
+            </div>
+          </div>
+
+          <div className="sidebar-group">
+            <h3 className="group-title">Google Mail</h3>
+            <div className="google-auth-section">
+              {googleStatus.authenticated ? (
+                <div className="google-logged-in-container">
+                  <div className="status-chip active google-active">
+                    <CheckCircle size={18} strokeWidth={2} />
+                    <span className="email-text">{googleStatus.email}</span>
+                  </div>
+                  <button className="google-logout-btn" onClick={handleGoogleLogout} title="Çıkış Yap">
+                    <LogOut size={16} />
+                  </button>
+                </div>
+              ) : (
+                <button className="google-login-btn" onClick={handleGoogleLogin}>
+                  <MailIcon size={18} strokeWidth={2} />
+                  <span>Google ile Bağlan</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -838,46 +1050,109 @@ function App() {
           </div>
         </section>
 
-        {/* Customer List */}
         <section className="customers-section">
           <div className="section-header">
-            <h2>Müşteri Listesi ({pagination.total})</h2>
+            <div className="title-with-count">
+              <h2>Müşteri Listesi ({pagination.total}) {isCustomersLoading && <RefreshCw className="spin" size={18} style={{ display: 'inline-block', verticalAlign: 'middle', marginLeft: '10px' }} />}</h2>
+              <button className="add-manual-btn" onClick={() => { setSelectedCustomerForEdit(null); setIsCustomerModalOpen(true); }}>
+                <Plus size={16} /> Manuel Ekle
+              </button>
+            </div>
             <div className="list-filters">
+              <select
+                value={customerFilters.mainSectorId}
+                onChange={(e) => setCustomerFilters(prev => ({ ...prev, mainSectorId: e.target.value, subSectorId: '' }))}
+                className="filter-select"
+              >
+                <option value="">Tüm Ana Sektörler</option>
+                {allSectors.map(s => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+
+              {customerFilters.mainSectorId && (
+                <select
+                  value={customerFilters.subSectorId}
+                  onChange={(e) => setCustomerFilters(prev => ({ ...prev, subSectorId: e.target.value }))}
+                  className="filter-select"
+                >
+                  <option value="">Tüm Alt Sektörler</option>
+                  {(allSectors.find(s => String(s.id) === String(customerFilters.mainSectorId))?.sub_sectors || []).map(ss => (
+                    <option key={ss.id} value={ss.id}>{ss.name}</option>
+                  ))}
+                </select>
+              )}
+
               <div className="search-box">
                 <Search size={16} />
                 <input
-                  placeholder="Müşterilerde ara..."
-                  value={searchFilter}
-                  onChange={(e) => setSearchFilter(e.target.value)}
+                  placeholder="Hızlı arama (İsim, Şehir, Mail...)"
+                  value={customerFilters.search}
+                  onChange={(e) => setCustomerFilters(prev => ({ ...prev, search: e.target.value }))}
                 />
               </div>
+              <button
+                className={`bulk-mail-btn ${selectedCustomers.size > 0 ? 'active' : ''}`}
+                onClick={handleBulkMail}
+                disabled={bulkSending.active}
+              >
+                {bulkSending.active ? (
+                  <RefreshCw className="spin" size={16} />
+                ) : (
+                  <Send size={16} />
+                )}
+                <span>Toplu Mail ({selectedCustomers.size})</span>
+              </button>
             </div>
           </div>
+
+          {bulkSending.active && (
+            <div className="bulk-progress-bar">
+              <div className="progress-info">
+                <span>{bulkSending.status}</span>
+                <span>{bulkSending.current} / {bulkSending.total}</span>
+              </div>
+              <div className="progress-track">
+                <div
+                  className="progress-fill"
+                  style={{ width: `${(bulkSending.current / bulkSending.total) * 100}%` }}
+                ></div>
+              </div>
+            </div>
+          )}
 
           <div className="table-wrapper">
             <table>
               <thead>
                 <tr>
+                  <th width="40">
+                    <div
+                      className={`checkbox small ${customers.length > 0 && selectedCustomers.size === customers.length ? 'checked' : ''}`}
+                      onClick={() => {
+                        if (selectedCustomers.size === customers.length) setSelectedCustomers(new Set());
+                        else setSelectedCustomers(new Set(customers.map(c => c.id)));
+                      }}
+                    ></div>
+                  </th>
                   <th>Şirket Adı</th>
-                  <th>Ana Sektör</th>
+                  <th>Sektör</th>
                   <th>Alt Sektör</th>
                   <th>Web Sitesi</th>
                   <th>Mail</th>
                   <th>Konum</th>
                   <th>Son Mail</th>
+                  <th>Durum</th>
+                  <th>Notlar</th>
                   <th width="50">İşlem</th>
                 </tr>
               </thead>
               <tbody>
                 {customers
-                  .filter(c =>
-                    c.company_name?.toLowerCase().includes(searchFilter.toLowerCase()) ||
-                    c.sub_sector_name?.toLowerCase().includes(searchFilter.toLowerCase()) ||
-                    c.main_sector_name?.toLowerCase().includes(searchFilter.toLowerCase()) ||
-                    c.city?.toLowerCase().includes(searchFilter.toLowerCase())
-                  )
                   .map((c, i) => (
-                    <tr key={c.id || i}>
+                    <tr key={c.id || i} className={selectedCustomers.has(c.id) ? 'selected-row' : ''}>
+                      <td onClick={(e) => { e.stopPropagation(); toggleCustomerSelection(c.id); }}>
+                        <div className={`checkbox ${selectedCustomers.has(c.id) ? 'checked' : ''}`}></div>
+                      </td>
                       <td><strong>{c.company_name}</strong></td>
                       <td><span className="badge navy">{c.main_sector_name}</span></td>
                       <td><span className="badge teal">{c.sub_sector_name}</span></td>
@@ -892,8 +1167,61 @@ function App() {
                         ) : '-'}
                       </td>
                       <td>
-                        <button className="action-icon-btn" onClick={() => setSelectedMailCustomer(c)}>
+                        <select
+                          value={c.status || 'New Lead'}
+                          onChange={async (e) => {
+                            const newStatus = e.target.value;
+                            // Optimistic Update
+                            setCustomers(prev => prev.map(cust =>
+                              cust.id === c.id ? { ...cust, status: newStatus } : cust
+                            ));
+
+                            try {
+                              const resp = await fetch(`${API_BASE}/customers/${c.id}/status`, {
+                                method: 'PATCH',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ status: newStatus })
+                              });
+                              if (!resp.ok) {
+                                // Rollback if error
+                                fetchCustomers(currentPage);
+                                alert("Durum güncellenemedi.");
+                              }
+                            } catch (err) {
+                              console.error("Status update error:", err);
+                              fetchCustomers(currentPage);
+                            }
+                          }}
+                          className={`status-badge-select ${c.status?.replace(/ /g, '-').toLowerCase() || 'new-lead'}`}
+                        >
+                          <option value="New Lead">New Lead</option>
+                          <option value="Contacted Call">Contacted Call</option>
+                          <option value="Contacted Mail">Contacted Mail</option>
+                          <option value="No Response">No Response</option>
+                          <option value="Interested">Interested</option>
+                          <option value="Meeting Scheduled">Meeting Scheduled</option>
+                          <option value="Proposal Sent">Proposal Sent</option>
+                          <option value="Closed Won">Closed Won</option>
+                          <option value="Closed Lost">Closed Lost</option>
+                        </select>
+                      </td>
+                      <td>
+                        {c.notes ? (
+                          <div className="notes-indicator" title={c.notes}>
+                            <MessageSquare size={16} />
+                            <span>{c.notes.substring(0, 20)}{c.notes.length > 20 ? '...' : ''}</span>
+                          </div>
+                        ) : '-'}
+                      </td>
+                      <td className="actions-cell">
+                        <button className="action-icon-btn mail" title="Mail Gönder" onClick={() => setSelectedMailCustomer(c)}>
                           <MailIcon size={16} strokeWidth={2} />
+                        </button>
+                        <button className="action-icon-btn edit" title="Düzenle" onClick={() => { setSelectedCustomerForEdit(c); setIsCustomerModalOpen(true); }}>
+                          <Pencil size={16} strokeWidth={2} />
+                        </button>
+                        <button className="action-icon-btn delete" title="Sil" onClick={() => handleDeleteCustomer(c.id)}>
+                          <Trash2 size={16} strokeWidth={2} />
                         </button>
                       </td>
                     </tr>
@@ -913,34 +1241,50 @@ function App() {
         </section>
       </div>
 
-      {isSettingsOpen && (
-        <SettingsModal
-          onClose={() => setIsSettingsOpen(false)}
-          onSave={(key) => { setApiKey(key); setIsSettingsOpen(false) }}
-          initialApiKey={apiKey}
-        />
-      )}
+      {
+        isSettingsOpen && (
+          <SettingsModal
+            onClose={() => setIsSettingsOpen(false)}
+            onSave={(key) => { setApiKey(key); setIsSettingsOpen(false) }}
+            initialApiKey={apiKey}
+          />
+        )
+      }
 
-      {selectedMailCustomer && (
-        <MailModal
-          customer={selectedMailCustomer}
-          apiKey={apiKey}
-          selectedModel={selectedService?.id || 'gemini-1.5-flash'}
-          onClose={() => setSelectedMailCustomer(null)}
-          onMailSent={() => fetchCustomers(currentPage)}
-          subSectors={(allSectors || []).flatMap(m => m.sub_sectors || [])}
-        />
-      )}
+      {
+        selectedMailCustomer && (
+          <MailModal
+            customer={selectedMailCustomer}
+            apiKey={apiKey}
+            selectedModel={selectedService?.id || 'gemini-1.5-flash'}
+            onClose={() => setSelectedMailCustomer(null)}
+            onMailSent={() => fetchCustomers(currentPage)}
+            subSectors={(allSectors || []).flatMap(m => m.sub_sectors || [])}
+          />
+        )
+      }
 
-      {isSectorModalOpen && (
-        <SectorManagementModal
-          onClose={() => {
-            setIsSectorModalOpen(false)
-            fetchSectors()
-          }}
-        />
-      )}
-    </div>
+      {
+        isSectorModalOpen && (
+          <SectorManagementModal
+            onClose={() => {
+              setIsSectorModalOpen(false)
+              fetchSectors()
+            }}
+          />
+        )
+      }
+      {
+        isCustomerModalOpen && (
+          <CustomerModal
+            customer={selectedCustomerForEdit}
+            onClose={() => setIsCustomerModalOpen(false)}
+            onSave={() => fetchCustomers(currentPage)}
+            allSectors={allSectors}
+          />
+        )
+      }
+    </div >
   )
 }
 

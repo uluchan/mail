@@ -139,27 +139,35 @@ const SectorManagementModal = ({ onClose }) => {
                 const ws = wb.Sheets[wsname];
                 const rawData = utils.sheet_to_json(ws);
 
-                if (rawData.length === 0) return alert('Dosya boş!');
+                const formatted = rawData.map(row => {
+                    const getCellValue = (headers) => {
+                        const foundKey = Object.keys(row).find(k => headers.includes(k.trim()));
+                        return foundKey ? row[foundKey] : null;
+                    };
+                    return {
+                        main_sector: getCellValue(['Ana Sektör', 'Main Sector']),
+                        sub_sector: getCellValue(['Alt Sektör', 'Sub Sector']),
+                        mail_subject: getCellValue(['Mail Başlığı', 'Subject']),
+                        mail_template: getCellValue(['Mail Şablonu', 'Template'])
+                    };
+                }).filter(item => item.main_sector && item.sub_sector);
 
-                const formatted = rawData.map(row => ({
-                    main_sector: row['Ana Sektör'],
-                    sub_sector: row['Alt Sektör'],
-                    mail_subject: row['Mail Başlığı'],
-                    mail_template: row['Mail Şablonu']
-                }));
+                if (formatted.length === 0) return alert('Geçerli veri bulunamadı! Lütfen sütun başlıklarını kontrol edin (Ana Sektör, Alt Sektör, Mail Başlığı, Mail Şablonu).');
 
                 setLoading(true);
-                const resp = await fetch('http://localhost:3001/api/sectors/bulk', {
+                const resp = await fetch(`${API_BASE}/sectors/bulk`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(formatted)
                 });
 
                 if (resp.ok) {
-                    alert('İçe aktarma başarılı!');
+                    const data = await resp.json();
+                    alert(data.message || 'İçe aktarma başarılı!');
                     fetchSectors();
                 } else {
-                    alert('İçe aktarma hatası!');
+                    const errorData = await resp.json();
+                    alert('İçe aktarma hatası: ' + (errorData.error || 'Bilinmeyen hata'));
                 }
             } catch (err) {
                 console.error('Import error:', err);

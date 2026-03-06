@@ -1,0 +1,149 @@
+.customer-modal {
+    background: white;
+    width: 90%;
+    max-width: 600px;
+    border-radius: 12px;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+    display: flex;
+    flex-direction: column;
+    max-height: 90vh;
+}
+
+.modal-header {
+    padding: 20px;
+    border-bottom: 1px solid #e5e7eb;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.modal-header h2 {
+    margin: 0;
+    font-size: 1.25rem;
+    color: #111827;
+}
+
+.modal-form {
+    padding: 24px;
+    overflow-y: auto;
+}
+
+.form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+}
+
+.form-group.full-width {
+    grid-column: span 2;
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.form-group label {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #4b5563;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.form-group input,
+.form-group select {
+    padding: 10px 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 0.9375rem;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.form-group input:focus,
+.form-group select:focus {
+    border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.form-error {
+    background: #fee2e2;
+    color: #dc2626;
+    padding: 12px;
+    border-radius: 6px;
+    margin-bottom: 16px;
+    font-size: 0.875rem;
+}
+
+.modal-footer {
+    padding: 20px;
+    border-top: 1px solid #e5e7eb;
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    background: #f9fafb;
+    border-bottom-left-radius: 12px;
+    border-bottom-right-radius: 12px;
+}
+
+.cancel-btn {
+    padding: 10px 20px;
+    border: 1px solid #d1d5db;
+    background: white;
+    border-radius: 6px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.cancel-btn:hover {
+    background: #f3f4f6;
+}
+
+.save-btn {
+    padding: 10px 24px;
+    background: #2563eb;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-weight: 500;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: background 0.2s;
+}
+
+.save-btn:hover {
+    background: #1d4ed8;
+}
+
+.save-btn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+.spinner-small {
+    width: 18px;
+    height: 18px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    border-top-color: white;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+@media (max-width: 640px) {
+    .form-grid {
+        grid-template-columns: 1fr;
+    }
+    .form-group.full-width {
+        grid-column: span 1;
+    }
+}
