@@ -119,7 +119,7 @@ function App() {
       const currentOrigin = window.location.origin;
       const redirectUri = currentOrigin.includes('localhost')
         ? 'http://localhost:3001/api/auth/google/callback'
-        : 'https://mail-git-main-uluchan-4854s-projects.vercel.app/api/auth/google/callback';
+        : `${currentOrigin}/api/auth/google/callback`;
 
       const resp = await fetch(`${API_BASE}/auth/google/url?redirectUri=${encodeURIComponent(redirectUri)}`)
       const { url } = await resp.json()
