@@ -662,16 +662,20 @@ app.post('/api/auth/google/logout', (req, res) => {
     }
 });
 
-// Helper to get Gmail Signature
-async function getGmailSignature(auth) {
+// Helper to get Gmail Sender Info (Signature & Display Name)
+async function getGmailSenderInfo(auth) {
     try {
         const gmail = google.gmail({ version: 'v1', auth });
         const res = await gmail.users.settings.sendAs.list({ userId: 'me' });
         const primary = res.data.sendAs?.find(account => account.isPrimary);
-        return primary ? primary.signature : '';
+        return {
+            signature: primary?.signature || '',
+            displayName: primary?.displayName || '',
+            email: primary?.sendAsEmail || ''
+        };
     } catch (err) {
-        console.error('[GmailSignature] Error fetching signature:', err);
-        return '';
+        console.error('[GmailSenderInfo] Error fetching info:', err);
+        return { signature: '', displayName: '', email: '' };
     }
 }
 
@@ -688,12 +692,19 @@ app.post('/api/send-email', async (req, res) => {
 
         // Try Gmail API if authenticated
         if (oauth2Client.credentials && oauth2Client.credentials.refresh_token) {
-            const signature = await getGmailSignature(oauth2Client);
-            const fullHtml = signature ? `${html}<br><br>${signature}` : html;
+            const senderInfo = await getGmailSenderInfo(oauth2Client);
+            const fullHtml = senderInfo.signature ? `${html}<br><br>${senderInfo.signature}` : html;
             const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
             const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
+            
+            // Encode the display name too if it exists to handle Turkish characters
+            const fromHeader = senderInfo.displayName 
+                ? `=?utf-8?B?${Buffer.from(senderInfo.displayName).toString('base64')}?= <${senderInfo.email}>` 
+                : senderInfo.email;
+
             const messageParts = [
+                `From: ${fromHeader}`,
                 `To: ${to}`,
                 'Content-Type: text/html; charset=utf-8',
                 'MIME-Version: 1.0',
