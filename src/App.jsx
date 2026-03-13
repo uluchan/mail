@@ -45,7 +45,8 @@ function App() {
     email: '',
     website: '',
     status: '',
-    notes: ''
+    notes: '',
+    neverMailed: false
   })
 
   // Search Parameters & Results
@@ -340,6 +341,7 @@ function App() {
       if (website) params.append('website', website);
       if (status) params.append('status', status);
       if (notes) params.append('notes', notes);
+      if (filters.neverMailed) params.append('never_mailed', 'true');
 
       let url = `${API_BASE}/customers?${params.toString()}`;
       console.log("Fetching customers with URL:", url);
@@ -1429,6 +1431,13 @@ function App() {
                   <Send size={16} />
                 )}
                 <span>Toplu Mail ({selectedCustomers.size})</span>
+              </button>
+              <button 
+                className={`filter-quick-btn ${customerFilters.neverMailed ? 'active' : ''}`}
+                onClick={() => setCustomerFilters(prev => ({ ...prev, neverMailed: !prev.neverMailed }))}
+              >
+                <MailIcon size={16} /> 
+                {customerFilters.neverMailed ? 'Tüm Mailleri Göster' : 'Hiç Mail Atılmayanlar'}
               </button>
             </div>
           </div>

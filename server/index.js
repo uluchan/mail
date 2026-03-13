@@ -387,7 +387,7 @@ app.get('/api/customers', async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const offset = (page - 1) * limit;
 
-    const { city, district, main_sector_id, sub_sector_id, search, company_name, email, website, status, notes } = req.query;
+    const { city, district, main_sector_id, sub_sector_id, search, company_name, email, website, status, notes, never_mailed } = req.query;
 
     try {
         const connection = await getDbConnection();
@@ -435,6 +435,9 @@ app.get('/api/customers', async (req, res) => {
             whereClauses.push("(c.company_name LIKE ? OR c.email LIKE ? OR c.authorized_person LIKE ? OR c.city LIKE ? OR c.district LIKE ? OR c.website LIKE ?)");
             const searchParam = `%${search}%`;
             params.push(searchParam, searchParam, searchParam, searchParam, searchParam, searchParam);
+        }
+        if (never_mailed === 'true') {
+            whereClauses.push("c.last_mail_at IS NULL");
         }
 
         const whereSql = whereClauses.length > 0 ? "WHERE " + whereClauses.join(" AND ") : "";

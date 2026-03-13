@@ -846,9 +846,36 @@ tr:hover {
   border-left: 3px solid var(--blue);
 }
 
+.filter-quick-btn {
+  background: var(--bg-white);
+  border: 1px solid var(--bg-gray);
+  color: var(--gray-dark);
+  padding: 10px 20px;
+  border-radius: var(--radius-btn);
+  font-size: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: var(--shadow-low);
+}
+
+.filter-quick-btn:hover {
+  background: var(--bg-soft);
+  border-color: var(--gray-medium);
+}
+
+.filter-quick-btn.active {
+  background: var(--black);
+  color: var(--neon);
+  border-color: var(--black);
+}
+
 .list-filters {
   display: flex;
-  gap: 1rem;
+  gap: 12px;
 }
 
 .search-box {
