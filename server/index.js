@@ -576,7 +576,32 @@ app.get('/api/auth/google/url', (req, res) => {
 app.get('/api/auth/google/callback', async (req, res) => {
     const { code } = req.query;
     try {
-        const { tokens } = await oauth2Client.getToken(code);
+        const possibleUris = [
+            process.env.GOOGLE_REDIRECT_URI,
+            'http://localhost:3001/api/auth/google/callback',
+            'https://mail-git-main-uluchan-4854s-projects.vercel.app/api/auth/google/callback'
+        ].filter(Boolean);
+
+        let tokens = null;
+        let lastError = null;
+
+        for (const uri of possibleUris) {
+            try {
+                const tempClient = new google.auth.OAuth2(
+                    process.env.GOOGLE_CLIENT_ID,
+                    process.env.GOOGLE_CLIENT_SECRET,
+                    uri
+                );
+                const { tokens: t } = await tempClient.getToken(code);
+                tokens = t;
+                break;
+            } catch (e) {
+                lastError = e;
+            }
+        }
+
+        if (!tokens) throw lastError || new Error('Token alınamadı.');
+
         oauth2Client.setCredentials(tokens);
         fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens));
         res.send('<h1>Başarıyla bağlandı!</h1><p>Şimdi uygulamaya geri dönebilirsiniz. Bu pencereyi kapatabilirsiniz.</p><script>window.close()</script>');

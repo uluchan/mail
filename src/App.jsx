@@ -136,7 +136,9 @@ function App() {
   const handleGoogleLogin = async () => {
     try {
       const currentOrigin = window.location.origin;
-      const redirectUri = 'http://localhost:3001/api/auth/google/callback';
+      const redirectUri = currentOrigin.includes('localhost') 
+        ? 'http://localhost:3001/api/auth/google/callback'
+        : `${currentOrigin}/api/auth/google/callback`;
 
       // 1. Open popup immediately to prevent popup blocker
       const width = 600, height = 700;
