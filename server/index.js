@@ -483,19 +483,29 @@ app.get('/api/customers', async (req, res) => {
 app.post('/api/customers', async (req, res) => {
     try {
         const { company_name, main_sector_id, sub_sector_id, email, website, city, district, phone, authorized_person, last_mail_at, status, notes } = req.body;
+        
+        // Normalize website
+        let normalizedWebsite = (website || '').trim().toLowerCase();
+        if (normalizedWebsite.endsWith('/')) normalizedWebsite = normalizedWebsite.slice(0, -1);
+
         const connection = await getDbConnection();
         await connection.execute(
             `INSERT INTO customers (
                 company_name, main_sector_id, sub_sector_id, email, website, city, district, phone, authorized_person, last_mail_at, status, notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [company_name, main_sector_id, sub_sector_id, email, website, city, district, phone, authorized_person, last_mail_at || null, status || 'New Lead', notes || null]
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE 
+                email = CASE 
+                    WHEN email IS NULL OR email = '' THEN VALUES(email)
+                    WHEN VALUES(email) IS NULL OR VALUES(email) = '' THEN email
+                    ELSE CONCAT(email, ', ', VALUES(email))
+                END,
+                company_name = IF(company_name = 'İsimsiz Şirket' OR company_name IS NULL, VALUES(company_name), company_name)`,
+            [company_name, main_sector_id, sub_sector_id, email, normalizedWebsite || null, city, district, phone, authorized_person, last_mail_at || null, status || 'New Lead', notes || null]
         );
         await connection.end();
-        res.json({ status: 'success', message: 'Müşteri başarıyla eklendi.' });
+        res.json({ status: 'success', message: 'Müşteri başarıyla eklendi veya mevcut kayıt güncellendi.' });
     } catch (error) {
-        if (error.code === 'ER_DUP_ENTRY') {
-            return res.status(400).json({ error: 'Bu email adresi zaten kayıtlı.' });
-        }
+        console.error('Insert Error:', error);
         res.status(500).json({ error: error.message });
     }
 });
