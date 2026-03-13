@@ -712,7 +712,7 @@ app.post('/api/send-email', async (req, res) => {
                 '',
                 fullHtml,
             ];
-            const message = messageParts.join('\n');
+            const message = messageParts.join('\r\n');
             const encodedMessage = Buffer.from(message)
                 .toString('base64')
                 .replace(/\+/g, '-')
