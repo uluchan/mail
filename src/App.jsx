@@ -35,7 +35,18 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [dbStatus, setDbStatus] = useState({ loading: true, connected: false, message: '' })
-  const [customerFilters, setCustomerFilters] = useState({ city: '', mainSectorId: '', subSectorId: '', search: '' })
+  const [customerFilters, setCustomerFilters] = useState({ 
+    city: '', 
+    district: '',
+    mainSectorId: '', 
+    subSectorId: '', 
+    search: '',
+    company_name: '',
+    email: '',
+    website: '',
+    status: '',
+    notes: ''
+  })
 
   // Search Parameters & Results
   const [searchParams, setSearchParams] = useState({ city: '', district: '', sector: '', mainSector: '' })
@@ -45,7 +56,15 @@ function App() {
   const [searchStatus, setSearchStatus] = useState('')
   const [selectedForDb, setSelectedForDb] = useState(new Set())
   const [isAutoDiscovering, setIsAutoDiscovering] = useState(false)
-  const [autoDiscoverStatus, setAutoDiscoverStatus] = useState({ total: 0, current: 0, currentSector: '' })
+  const [autoDiscoverStatus, setAutoDiscoverStatus] = useState({ total: 0, current: 0, currentSector: '', startTime: null, estimatedTotalTime: 0 })
+  
+  const [isSurpriseActive, setIsSurpriseActive] = useState(false)
+  const [surpriseStats, setSurpriseStats] = useState({ totalFound: 0, startTime: null, avgTimePerCustomer: 0, currentStatus: '' })
+
+  const majorCities = [
+    'İstanbul', 'Ankara', 'İzmir', 'Bursa', 'Antalya', 'Adana', 'Konya', 'Gaziantep', 'Mersin', 'Kayseri',
+    'Eskişehir', 'Denizli', 'Samsun', 'Sakarya', 'Muğla', 'Aydın', 'Balıkesir', 'Tekirdağ'
+  ];
 
   // Customer List State (Pagination)
   const [customers, setCustomers] = useState([])
@@ -292,13 +311,24 @@ function App() {
   const fetchCustomers = async (page, filters = customerFilters) => {
     setIsCustomersLoading(true)
     try {
-      const { city, mainSectorId, subSectorId, search } = filters;
-      let url = `${API_BASE}/customers?page=${page}&limit=20`;
-      if (city) url += `&city=${encodeURIComponent(city)}`;
-      if (mainSectorId) url += `&main_sector_id=${mainSectorId}`;
-      if (subSectorId) url += `&sub_sector_id=${subSectorId}`;
-      if (search) url += `&search=${encodeURIComponent(search)}`;
+      const { city, district, mainSectorId, subSectorId, search, company_name, email, website, status, notes } = filters;
+      let params = new URLSearchParams({
+        page: page.toString(),
+        limit: "20"
+      });
+      
+      if (city) params.append('city', city);
+      if (district) params.append('district', district);
+      if (mainSectorId) params.append('main_sector_id', mainSectorId);
+      if (subSectorId) params.append('sub_sector_id', subSectorId);
+      if (search) params.append('search', search);
+      if (company_name) params.append('company_name', company_name);
+      if (email) params.append('email', email);
+      if (website) params.append('website', website);
+      if (status) params.append('status', status);
+      if (notes) params.append('notes', notes);
 
+      let url = `${API_BASE}/customers?${params.toString()}`;
       console.log("Fetching customers with URL:", url);
       const resp = await fetch(url)
       const data = await resp.json()
@@ -381,7 +411,14 @@ function App() {
 
     console.log(`[AutoDiscovery] Toplam hazırlanan görev sayısı: ${tasks.length}`);
 
-    setAutoDiscoverStatus({ total: tasks.length, current: 0, currentSector: '', isSaving: false });
+    setAutoDiscoverStatus({ 
+      total: tasks.length, 
+      current: 0, 
+      currentSector: '', 
+      isSaving: false,
+      startTime: Date.now(),
+      estimatedTotalTime: 0
+    });
 
     if (tasks.length === 0) {
       alert("Taranacak sektör bulunamadı. Lütfen önce 'Sektörler & Şablonlar' menüsünden sektör ekleyin.");
@@ -389,15 +426,18 @@ function App() {
       return;
     }
 
-    // Initialize AI once outside the loop
+    const systemText = "Sen profesyonel bir pazar araştırmacısısın. GÖREVİN: Sadece varlığından %100 emin olduğun, şu an aktif olarak çalışan ve KENDİNE AİT web sitesi olan gerçek şirketleri bulmak. Park halindeki alan adlarını, sahte (mock) verileri, uydurma e-postaları (örn: @email.com, @test.com) veya kapalı siteleri KESİNLİKLE dahil etme. Eğer bir şirketin gerçek e-postasını bulamıyorsan o şirketi listeye ekleme.";
+    const supportsSystemInstruction = selectedService.id.startsWith('gemini-');
+
     let genAI;
     let model;
     try {
       genAI = new GoogleGenerativeAI(apiKey);
-      model = genAI.getGenerativeModel({
-        model: selectedService.id,
-        systemInstruction: "Sen profesyonel bir pazar araştırmacısısın. KESİN KURAL: Sadece gerçekte var olan ve AKTİF bir web sitesine sahip şirketleri listele."
-      });
+      const modelConfig = { model: selectedService.id };
+      if (supportsSystemInstruction) {
+        modelConfig.systemInstruction = systemText;
+      }
+      model = genAI.getGenerativeModel(modelConfig);
     } catch (err) {
       alert("AI bağlantısı kurulurken hata oluştu: " + err.message);
       setIsAutoDiscovering(false);
@@ -405,13 +445,31 @@ function App() {
     }
 
     let errorReported = false;
-    let isActuallyDiscovering = true; // Use this to track local context
+    const startTimeLocal = Date.now();
 
     for (let i = 0; i < tasks.length; i++) {
       const task = tasks[i];
 
-      // Update UI
-      setAutoDiscoverStatus(prev => ({ ...prev, current: i + 1, currentSector: task.subName, isSaving: false }));
+      // Update UI and ETC
+      const now = Date.now();
+      const elapsed = (now - startTimeLocal) / 1000;
+      let estimatedRemaining = 0;
+      
+      if (i > 0) {
+        const averageTimePerTask = elapsed / i;
+        estimatedRemaining = Math.round(averageTimePerTask * (tasks.length - i));
+      } else {
+        // Initial estimate: roughly 35s per task
+        estimatedRemaining = (tasks.length - i) * 35;
+      }
+
+      setAutoDiscoverStatus(prev => ({ 
+        ...prev, 
+        current: i + 1, 
+        currentSector: task.subName, 
+        isSaving: false,
+        estimatedRemaining
+      }));
       console.log(`[AutoDiscovery] Sektör işleniyor ${i + 1}/${tasks.length}: ${task.subName}`);
 
       try {
@@ -420,27 +478,56 @@ function App() {
           : "Tüm Türkiye genelinde";
 
         const sectorQuery = task.mainName ? `${task.mainName} ana sektörü altındaki ${task.subName}` : task.subName;
-        const prompt = `${locationText} "${sectorQuery}" alanında faaliyet gösteren gerçek şirketleri bul. Maksimum 10 şirket getir. Veri formatı (Sadece JSON listesi): [{"company_name": "...", "website": "...", "email": "...", "city": "...", "district": "...", "phone": "...", "authorized_person": "..."}]`;
+        let prompt = `${locationText} "${sectorQuery}" alanında faaliyet gösteren bulabildiğin kadar çok gerçek şirketi bul (Maksimum 40-50 adet). 
+        KRİTİK: Sadece GERÇEK e-posta adreslerini yaz. Uydurma veya placeholder (@email.com, @test.com, @email2 vb.) adresleri KESİNLİKLE yazma. 
+        Eğer şirketin gerçek e-postası bulunamıyorsa o şirketi listeye ekleme.
+        Eğer şirketin birden fazla e-posta adresi varsa tümünü virgülle ayırarak "email" alanına yaz.
+        Veri formatı (Sadece JSON listesi): [{"company_name": "...", "website": "...", "email": "email1, email2...", "city": "...", "district": "...", "phone": "...", "authorized_person": "..."}]`;
+
+        if (!supportsSystemInstruction) {
+          prompt = `${systemText}\n\n${prompt}`;
+        }
 
         console.log(`[AutoDiscovery] Prompt gönderiliyor: ${prompt.substring(0, 100)}...`);
         const result = await model.generateContent(prompt);
         const text = result.response.text();
         console.log(`[AutoDiscovery] AI Yanıtı alındı.`);
-        const jsonMatch = text.match(/\[[\s\S]*\]/);
+        const jsonMatch = text.replace(/```json|```/g, "").match(/\[\s*\{[\s\S]*\}\s*\]/);
 
         if (jsonMatch) {
-          let data = JSON.parse(jsonMatch[0]);
-          console.log(`[AutoDiscovery] AI ${data.length} adet ham veri döndürdü.`);
-          data = data.map(item => ({
-            ...item,
-            main_sector_id: task.mainId,
-            sub_sector_id: task.subId,
-            main_sector_name: task.mainName,
-            sub_sector_name: task.subName
-          }));
+          let data = [];
+          try {
+            data = JSON.parse(jsonMatch[0]);
+          } catch (parseErr) {
+            console.error(`[AutoDiscovery] JSON Parse Hatası (${task.subName}):`, parseErr);
+            console.log("[AutoDiscovery] Hatalı Metin:", text);
+            continue; // Skip this sector if parse fails
+          }
+          
+          data = data.filter(item => {
+            if (!item.email || !item.website) return false;
+            const emailStr = String(item.email);
+            const emails = emailStr.split(',').map(e => e.trim().toLowerCase());
+            const validEmails = emails.filter(e => {
+              const domain = e.split('@')[1] || '';
+              const isPlaceholder = ['email.com', 'email2', 'email3', 'test.com', 'example.com', 'domain.com'].some(p => domain.includes(p));
+              const hasDot = domain.includes('.');
+              return e.includes('@') && hasDot && !isPlaceholder;
+            });
+            if (validEmails.length === 0) return false;
+            item.email = validEmails.join(', ');
+            return true;
+          });
+
+          if (data.length === 0) {
+            console.log(`[AutoDiscovery] Sektör ${task.subName} için geçerli e-postalı firma bulunamadı.`);
+            continue;
+          }
+
+          console.log(`[AutoDiscovery] AI ${data.length} adet geçerli veri döndürdü.`);
 
           console.log(`[AutoDiscovery] Web siteleri doğrulanıyor...`);
-          const verifyResp = await fetch('http://localhost:3001/api/verify-websites', {
+          const verifyResp = await fetch(`${API_BASE}/verify-websites`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ companies: data })
@@ -495,74 +582,142 @@ function App() {
     alert(`Otomatik keşif tamamlandı! Toplam ${tasks.length} sektör tarandı.`);
   }
 
-  const handleAiSearch = async () => {
-    if (isAiLoading || !apiKey || !selectedService) return;
-    if (!searchParams.sector) return alert('Lütfen sektör alanını doldurun.');
+  const handleAiSearch = async (loopMode = false) => {
+    if ((isAiLoading && !loopMode) || !apiKey || !selectedService) return;
+    const randomizeParams = () => {
+      let sector = searchParams.sector;
+      let main = searchParams.mainSector;
+      let city = searchParams.city;
 
+      if (!sector && allSectors.length > 0) {
+        const randomMain = allSectors[Math.floor(Math.random() * allSectors.length)];
+        if (randomMain.sub_sectors && randomMain.sub_sectors.length > 0) {
+          const randomSub = randomMain.sub_sectors[Math.floor(Math.random() * randomMain.sub_sectors.length)];
+          sector = randomSub.name;
+          main = randomMain.name;
+        } else {
+          sector = randomMain.name;
+        }
+      }
+
+      if (!city) {
+        city = majorCities[Math.floor(Math.random() * majorCities.length)];
+      }
+
+      return { sector, main, city };
+    };
+
+    let { sector: currentSector, main: currentMain, city: currentCity } = randomizeParams();
+
+    if (!currentSector) return alert('Lütfen sektör alanını doldurun.');
+
+    if (loopMode) setIsSurpriseActive(true);
     setIsAiLoading(true);
     setSearchProgress(0);
     setSearchStatus('Yapay zeka motoru hazırlanıyor...');
-    setAiResults([]);
+    if (!loopMode) setAiResults([]);
 
-    // Find our database IDs for sectors
+    if (loopMode) {
+      setSurpriseStats({ totalFound: 0, startTime: Date.now(), avgTimePerCustomer: 0, currentStatus: 'Başlatılıyor...' });
+    }
+
+    // 1. Check if Sector Exists, If not, create it as Main Sector
     let mainSectorId = null;
     let subSectorId = null;
-    let currentMainSectorName = searchParams.mainSector;
-    let finalSectorName = searchParams.sector;
+    let currentMainSectorName = currentMain;
+    let finalSectorName = currentSector;
 
     const foundMain = (allSectors || []).find(m =>
-      (m.sub_sectors || []).some(s => s.name?.toLowerCase() === searchParams.sector.toLowerCase()) ||
-      (searchParams.mainSector && m.name?.toLowerCase() === searchParams.mainSector.toLowerCase())
+      (m.sub_sectors || []).some(s => s.name?.toLowerCase() === currentSector.toLowerCase()) ||
+      (m.name?.toLowerCase() === currentSector.toLowerCase())
     );
 
     if (foundMain) {
       mainSectorId = foundMain.id;
       currentMainSectorName = foundMain.name;
-      const foundSub = foundMain.sub_sectors.find(s => s.name.toLowerCase() === searchParams.sector.toLowerCase());
+      const foundSub = (foundMain.sub_sectors || []).find(s => s.name.toLowerCase() === currentSector.toLowerCase());
       if (foundSub) {
         subSectorId = foundSub.id;
         finalSectorName = foundSub.name;
       }
+    } else {
+      // Create new main sector
+      try {
+        console.log(`[SectorAutoCreate] Sector "${finalSectorName}" not found. Creating as Main Sector...`);
+        const createResp = await fetch(`${API_BASE}/main-sectors`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: finalSectorName })
+        });
+        
+        if (createResp.ok) {
+          // Refresh sectors to get the new ID
+          const refreshResp = await fetch(`${API_BASE}/sectors`);
+          const refreshedSectors = await refreshResp.json();
+          setAllSectors(refreshedSectors);
+          
+          const newMain = refreshedSectors.find(m => m.name.toLowerCase() === finalSectorName.toLowerCase());
+          if (newMain) {
+            mainSectorId = newMain.id;
+            currentMainSectorName = newMain.name;
+            console.log(`[SectorAutoCreate] Successfully created and retrieved: ID ${mainSectorId}`);
+          }
+        }
+      } catch (err) {
+        console.error("Auto-sector creation failed:", err);
+      }
     }
 
     // Progress Simulation
-    const progressInterval = setInterval(() => {
-      setSearchProgress(prev => {
-        if (prev >= 95) return prev;
-        const inc = prev < 30 ? 2 : prev < 70 ? 0.5 : 0.1;
-        return prev + inc;
-      });
-    }, 200);
+    let progressInterval = null;
+    if (!loopMode) {
+      progressInterval = setInterval(() => {
+        setSearchProgress(prev => {
+          if (prev >= 95) return prev;
+          const inc = prev < 30 ? 2 : prev < 70 ? 0.5 : 0.1;
+          return prev + inc;
+        });
+      }, 200);
+    }
 
     const maxRetries = 2;
     let retryCount = 0;
 
     const runAi = async () => {
       try {
-        const locationText = searchParams.city
-          ? `${searchParams.city}${searchParams.district ? `/${searchParams.district}` : ''} bölgesinde`
+        const locationText = currentCity
+          ? `${currentCity}${searchParams.district ? `/${searchParams.district}` : ''} bölgesinde`
           : "Tüm Türkiye genelinde";
 
         setSearchStatus(`${locationText} ${finalSectorName} firmaları taranıyor...`);
+        const systemText = "Sen profesyonel bir pazar araştırmacısısın. KESİN KURAL: Sadece gerçekte var olan ve AKTİF bir web sitesine sahip şirketleri listele.";
+        const supportsSystemInstruction = selectedService.id.startsWith('gemini-');
+
         const genAI = new GoogleGenerativeAI(apiKey)
-        const model = genAI.getGenerativeModel({
-          model: selectedService.id,
-          systemInstruction: "Sen profesyonel bir pazar araştırmacısısın. KESİN KURAL: Sadece gerçekte var olan ve AKTİF bir web sitesine sahip şirketleri listele."
-        })
+        const modelConfig = { model: selectedService.id };
+        if (supportsSystemInstruction) {
+          modelConfig.systemInstruction = systemText;
+        }
+        const model = genAI.getGenerativeModel(modelConfig)
 
         const sectorQuery = currentMainSectorName
           ? `${currentMainSectorName} ana sektörü altındaki ${finalSectorName}`
           : finalSectorName;
 
-        const prompt = `${locationText} "${sectorQuery}" alanında faaliyet gösteren gerçek şirketleri bul. 
-        Maksimum 20 şirket getir, ancak liste dolsun diye kriteri bozma; sadece çalışan sitesi olanları getir.
+        const varietySeed = Math.floor(Math.random() * 10000);
+        let prompt = `${locationText} "${sectorQuery}" alanında faaliyet gösteren bulabildiğin kadar çok gerçek şirketi bul (Maksimum 50 adet). 
+        KRİTİK: Sadece gerçek e-posta adreslerini yaz. Uydurma veya placeholder (@email.com, @test.com vb.) adresleri KESİNLİKLE yazma. 
+        Eğer şirketin gerçek e-postası yoksa o şirketi listeye ekleme.
+        Eğer şirketin birden fazla e-posta adresi (genel, satış, yetkili, personel vb.) varsa, tümünü "email" alanında virgülle ayırarak yaz.
+        
+        ÇEŞİTLİLİK NOTU (Seed: ${varietySeed}): Daha önce verdiğin benzer sonuçlardan farklı, daha az bilinen, orta ölçekli veya spesifik firmalara odaklan. Alfabetik veya popülerlik sırasına göre değil, daha geniş bir yelpazeden sonuç ver.
         
         Veri formatı (Sadece JSON listesi):
         [
           {
             "company_name": "Gerçek Şirket Adı",
             "website": "https://www.sirket.com",
-            "email": "info@gerceksirket.com",
+            "email": "email1@sirket.com, email2@sirket.com",
             "city": "Bulunduğu Şehir",
             "district": "Bulunduğu İlçe/Bölge",
             "phone": "0XXXXXXXXXX",
@@ -570,13 +725,18 @@ function App() {
           }
         ]`
 
+        if (!supportsSystemInstruction) {
+          prompt = `${systemText}\n\n${prompt}`;
+        }
+
         const result = await model.generateContent(prompt)
         const text = result.response.text()
 
         // Robust JSON extraction to handle chatty AI
         let data = [];
         try {
-          const jsonMatch = text.match(/\[[\s\S]*\]/);
+          const cleanedText = text.replace(/```json|```/g, "").trim();
+          const jsonMatch = cleanedText.match(/\[\s*\{[\s\S]*\}\s*\]/);
           if (jsonMatch) {
             data = JSON.parse(jsonMatch[0]);
           } else {
@@ -585,6 +745,29 @@ function App() {
         } catch (jsonErr) {
           console.error("JSON Parse Error:", jsonErr, "Original Text:", text);
           throw new Error("Veri formatı çözümlenemedi. Lütfen tekrar deneyin.");
+        }
+
+        // Filter out hallucinated emails and incomplete data
+        data = data.filter(item => {
+          if (!item.email || !item.website) return false;
+          const emails = item.email.split(',').map(e => e.trim().toLowerCase());
+          const validEmails = emails.filter(e => {
+            const domain = e.split('@')[1] || '';
+            const isPlaceholder = ['email.com', 'email2', 'email3', 'test.com', 'example.com', 'domain.com'].some(p => domain.includes(p));
+            const hasDot = domain.includes('.');
+            return e.includes('@') && hasDot && !isPlaceholder;
+          });
+          if (validEmails.length === 0) return false;
+          item.email = validEmails.join(', ');
+          return true;
+        });
+
+        if (data.length === 0) {
+          if (loopMode) {
+            setSearchStatus('Uygun firma bulunamadı, sonrakine geçiliyor...');
+            return;
+          }
+          throw new Error("Geçerli e-posta adresine sahip firma bulunamadı. Lütfen aramayı daraltın veya tekrar deneyin.");
         }
 
         // Map data with DB IDs — IDs drive the relational model, names are display-only
@@ -613,12 +796,27 @@ function App() {
           tpm: prev.tpm + (result.response.usageMetadata?.totalTokenCount || 0)
         }));
 
-        setAiResults(liveData)
-        setSelectedForDb(new Set())
-        setSearchProgress(100);
-        setSearchStatus('Tamamlandı!');
+        if (loopMode) {
+          setSearchStatus(`${liveData.length} yeni şirket kaydediliyor...`);
+          await saveSelectedToDb(liveData);
+          setSurpriseStats(prev => {
+            const newTotal = prev.totalFound + liveData.length;
+            const elapsed = (Date.now() - prev.startTime) / 1000;
+            return {
+              ...prev,
+              totalFound: newTotal,
+              avgTimePerCustomer: newTotal > 0 ? (elapsed / newTotal).toFixed(1) : 0,
+              currentStatus: `${liveData.length} yeni şirket eklendi.`
+            };
+          });
+        } else {
+          setAiResults(liveData)
+          setSelectedForDb(new Set())
+          setSearchProgress(100);
+          setSearchStatus('Tamamlandı!');
+        }
 
-        if (liveData.length === 0) {
+        if (liveData.length === 0 && !loopMode) {
           alert('AI sonuçları doğrulanamadı. Lütfen farklı bir arama yapın.');
         }
       } catch (err) {
@@ -641,12 +839,66 @@ function App() {
     };
 
     try {
-      await runAi();
+      if (loopMode) {
+        // Infinite Loop
+        while (true) {
+          // Re-randomize for variety if loop is active
+          if (loopMode && !searchParams.sector) {
+            const nextParams = randomizeParams();
+            currentSector = nextParams.sector;
+            currentMain = nextParams.main;
+            currentCity = nextParams.city;
+            
+            // Re-evalute IDs for the new random sector
+            const foundM = (allSectors || []).find(m =>
+              (m.sub_sectors || []).some(s => s.name?.toLowerCase() === currentSector.toLowerCase()) ||
+              (m.name?.toLowerCase() === currentSector.toLowerCase())
+            );
+            if (foundM) {
+              mainSectorId = foundM.id;
+              currentMainSectorName = foundM.name;
+              const foundS = (foundM.sub_sectors || []).find(s => s.name.toLowerCase() === currentSector.toLowerCase());
+              if (foundS) {
+                subSectorId = foundS.id;
+                finalSectorName = foundS.name;
+              } else {
+                subSectorId = null;
+                finalSectorName = foundM.name;
+              }
+            }
+          }
+          
+          try {
+            await runAi();
+          } catch (loopErr) {
+            console.error("Loop iteration failed:", loopErr);
+            setSearchStatus(`Hata oluştu, bekleniyor: ${loopErr.message}`);
+            // If it's a quota error, we might want to wait longer or stop
+            if (loopErr.message?.includes('sınırınıza ulaştınız')) {
+              alert(loopErr.message);
+              break;
+            }
+            await new Promise(res => setTimeout(res, 30000)); // Wait 30s on error
+          }
+          
+          // Wait a bit between iterations to avoid spamming
+          setSearchStatus('Mola veriliyor, devam edilecek...');
+          await new Promise(res => setTimeout(res, 5000));
+          
+          if (window._stopSurprise) {
+            window._stopSurprise = false;
+            break;
+          }
+        }
+      } else {
+        await runAi();
+      }
     } catch (err) {
       alert('AI Hatası: ' + err.message);
     } finally {
-      clearInterval(progressInterval);
-      setTimeout(() => setIsAiLoading(false), 500);
+      if (progressInterval) clearInterval(progressInterval);
+      setIsAiLoading(false);
+      setIsSurpriseActive(false);
     }
   }
 
@@ -723,6 +975,32 @@ function App() {
     setSelectedCustomers(new Set());
     alert("Toplu gönderim tamamlandı.");
     fetchCustomers(currentPage);
+  }
+
+  const handleClearCustomers = async () => {
+    const password = prompt("Lütfen yönetici şifresini giriniz:");
+    if (!password) return;
+
+    if (!confirm("Tüm müşteri listesi kalıcı olarak silinecektir. Emin misiniz?")) return;
+
+    try {
+      const resp = await fetch(`${API_BASE}/customers/clear`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password })
+      });
+
+      const data = await resp.json();
+      if (resp.ok) {
+        alert(data.message);
+        fetchCustomers(1);
+      } else {
+        alert(data.error || "Bir hata oluştu.");
+      }
+    } catch (err) {
+      console.error("Clear error:", err);
+      alert("Sunucu bağlantı hatası: " + err.message);
+    }
   }
 
   const saveSelectedToDbFromUi = async () => {
@@ -838,6 +1116,14 @@ function App() {
           </div>
 
           <div className="sidebar-group">
+            <h3 className="group-title">Yönetim</h3>
+            <button className="admin-clear-btn" onClick={handleClearCustomers}>
+              <Trash2 size={18} />
+              <span>Listeyi Temizle</span>
+            </button>
+          </div>
+
+          <div className="sidebar-group">
             <div className="group-header-with-action">
               <h3 className="group-title">Kullanım Limitleri</h3>
               <button
@@ -946,9 +1232,20 @@ function App() {
             </div>
           </div>
 
-          <button className="surprise-btn" onClick={handleAiSearch} disabled={isAiLoading || isAutoDiscovering}>
-            {isAiLoading ? <RefreshCw className="spin" size={18} strokeWidth={2} /> : <Sparkles size={18} strokeWidth={2} />}
-            <span>Şaşırt Beni</span>
+          <button 
+            className={`surprise-btn ${isSurpriseActive ? 'active-loop' : ''}`} 
+            onClick={() => {
+              if (isSurpriseActive) {
+                window._stopSurprise = true;
+                setIsSurpriseActive(false);
+              } else {
+                handleAiSearch(true);
+              }
+            }} 
+            disabled={isAiLoading && !isSurpriseActive}
+          >
+            {isSurpriseActive ? <X size={18} strokeWidth={2} /> : <Sparkles size={18} strokeWidth={2} />}
+            <span>{isSurpriseActive ? 'Durdur' : 'Şaşırt Beni'}</span>
           </button>
           <button
             className={`auto-discovery-btn ${isAutoDiscovering ? 'active' : ''}`}
@@ -968,14 +1265,52 @@ function App() {
               <p>Türkiye genelindeki tüm sektörler taranıyor ve listeye ekleniyor...</p>
               <div className="sector-badge">{autoDiscoverStatus.currentSector}</div>
               <div className="progress-container">
-                <div className="progress-bar" style={{ width: `${(autoDiscoverStatus.current / autoDiscoverStatus.total) * 100}%` }}></div>
-                <span>{autoDiscoverStatus.current} / {autoDiscoverStatus.total} Sektör</span>
+                <div className="progress-track">
+                  <div className="progress-bar" style={{ width: `${(autoDiscoverStatus.current / autoDiscoverStatus.total) * 100}%` }}></div>
+                </div>
+                <div className="progress-stats">
+                  <span>{autoDiscoverStatus.current} / {autoDiscoverStatus.total} Sektör</span>
+                  {autoDiscoverStatus.estimatedRemaining > 0 && (
+                    <span className="etc-label">
+                      Tahmini Kalan: {Math.floor(autoDiscoverStatus.estimatedRemaining / 60)} dk {autoDiscoverStatus.estimatedRemaining % 60} sn
+                    </span>
+                  )}
+                </div>
               </div>
               {autoDiscoverStatus.isSaving && (
-                <div className="saving-indicator">
-                  <Database size={14} className="spin" /> Veriler Kaydediliyor...
-                </div>
+                <div className="saving-badge">Veritabanına kaydediliyor...</div>
               )}
+            </div>
+          </div>
+        )}
+
+        {isSurpriseActive && (
+          <div className="discovery-progress-overlay">
+            <div className="discovery-modal surprise-mode">
+              <Sparkles className="spin-slow" size={48} color="#d1ff37" />
+              <h2>Şaşırt Beni Modu Aktif</h2>
+              <p>Bulabildiğim kadar çok müşteri bulmaya devam ediyorum...</p>
+              
+              <div className="surprise-stats-grid">
+                <div className="s-stat">
+                  <label>Bulunan</label>
+                  <span>{surpriseStats.totalFound}</span>
+                </div>
+                <div className="s-stat">
+                  <label>Geçen Süre</label>
+                  <span>{Math.floor((Date.now() - (surpriseStats.startTime || Date.now())) / 1000)} sn</span>
+                </div>
+                <div className="s-stat">
+                  <label>Hız (1 Müşteri)</label>
+                  <span>{surpriseStats.avgTimePerCustomer} sn</span>
+                </div>
+              </div>
+              
+              <div className="sector-badge">{surpriseStats.currentStatus}</div>
+              
+              <button className="stop-loop-btn" onClick={() => { window._stopSurprise = true; setIsSurpriseActive(false); }}>
+                Yeterli, Durdur
+              </button>
             </div>
           </div>
         )}
@@ -1059,38 +1394,6 @@ function App() {
               </button>
             </div>
             <div className="list-filters">
-              <select
-                value={customerFilters.mainSectorId}
-                onChange={(e) => setCustomerFilters(prev => ({ ...prev, mainSectorId: e.target.value, subSectorId: '' }))}
-                className="filter-select"
-              >
-                <option value="">Tüm Ana Sektörler</option>
-                {allSectors.map(s => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
-
-              {customerFilters.mainSectorId && (
-                <select
-                  value={customerFilters.subSectorId}
-                  onChange={(e) => setCustomerFilters(prev => ({ ...prev, subSectorId: e.target.value }))}
-                  className="filter-select"
-                >
-                  <option value="">Tüm Alt Sektörler</option>
-                  {(allSectors.find(s => String(s.id) === String(customerFilters.mainSectorId))?.sub_sectors || []).map(ss => (
-                    <option key={ss.id} value={ss.id}>{ss.name}</option>
-                  ))}
-                </select>
-              )}
-
-              <div className="search-box">
-                <Search size={16} />
-                <input
-                  placeholder="Hızlı arama (İsim, Şehir, Mail...)"
-                  value={customerFilters.search}
-                  onChange={(e) => setCustomerFilters(prev => ({ ...prev, search: e.target.value }))}
-                />
-              </div>
               <button
                 className={`bulk-mail-btn ${selectedCustomers.size > 0 ? 'active' : ''}`}
                 onClick={handleBulkMail}
@@ -1144,6 +1447,100 @@ function App() {
                   <th>Durum</th>
                   <th>Notlar</th>
                   <th width="50">İşlem</th>
+                </tr>
+                <tr className="filter-row">
+                  <th></th>
+                  <th>
+                    <input 
+                      className="column-filter"
+                      placeholder="Şirket ara..."
+                      value={customerFilters.company_name}
+                      onChange={e => setCustomerFilters(prev => ({ ...prev, company_name: e.target.value }))}
+                    />
+                  </th>
+                  <th>
+                    <select
+                      className="column-filter"
+                      value={customerFilters.mainSectorId}
+                      onChange={e => setCustomerFilters(prev => ({ ...prev, mainSectorId: e.target.value, subSectorId: '' }))}
+                    >
+                      <option value="">Tümü</option>
+                      {allSectors.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    </select>
+                  </th>
+                  <th>
+                    <select
+                      className="column-filter"
+                      value={customerFilters.subSectorId}
+                      onChange={e => setCustomerFilters(prev => ({ ...prev, subSectorId: e.target.value }))}
+                      disabled={!customerFilters.mainSectorId}
+                    >
+                      <option value="">Tümü</option>
+                      {(allSectors.find(s => String(s.id) === String(customerFilters.mainSectorId))?.sub_sectors || []).map(ss => (
+                        <option key={ss.id} value={ss.id}>{ss.name}</option>
+                      ))}
+                    </select>
+                  </th>
+                  <th>
+                    <input 
+                      className="column-filter"
+                      placeholder="Web sitesi..."
+                      value={customerFilters.website}
+                      onChange={e => setCustomerFilters(prev => ({ ...prev, website: e.target.value }))}
+                    />
+                  </th>
+                  <th>
+                    <input 
+                      className="column-filter"
+                      placeholder="Mail ara..."
+                      value={customerFilters.email}
+                      onChange={e => setCustomerFilters(prev => ({ ...prev, email: e.target.value }))}
+                    />
+                  </th>
+                  <th>
+                    <div className="dual-filter">
+                      <input 
+                        className="column-filter half"
+                        placeholder="İl..."
+                        value={customerFilters.city}
+                        onChange={e => setCustomerFilters(prev => ({ ...prev, city: e.target.value }))}
+                      />
+                      <input 
+                        className="column-filter half"
+                        placeholder="İlçe..."
+                        value={customerFilters.district}
+                        onChange={e => setCustomerFilters(prev => ({ ...prev, district: e.target.value }))}
+                      />
+                    </div>
+                  </th>
+                  <th></th>
+                  <th>
+                    <select
+                      className="column-filter"
+                      value={customerFilters.status}
+                      onChange={e => setCustomerFilters(prev => ({ ...prev, status: e.target.value }))}
+                    >
+                      <option value="">Tümü</option>
+                      <option value="New Lead">New Lead</option>
+                      <option value="Contacted Call">Contacted Call</option>
+                      <option value="Contacted Mail">Contacted Mail</option>
+                      <option value="No Response">No Response</option>
+                      <option value="Interested">Interested</option>
+                      <option value="Meeting Scheduled">Meeting Scheduled</option>
+                      <option value="Proposal Sent">Proposal Sent</option>
+                      <option value="Closed Won">Closed Won</option>
+                      <option value="Closed Lost">Closed Lost</option>
+                    </select>
+                  </th>
+                  <th>
+                    <input 
+                      className="column-filter"
+                      placeholder="Notlarda ara..."
+                      value={customerFilters.notes}
+                      onChange={e => setCustomerFilters(prev => ({ ...prev, notes: e.target.value }))}
+                    />
+                  </th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>

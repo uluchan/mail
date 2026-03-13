@@ -30,3 +30,4 @@ server/.env
 
 # Server dependencies
 server/node_modules
+server/tokens.json

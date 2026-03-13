@@ -109,7 +109,7 @@ async function setupDatabase() {
                 company_name VARCHAR(255) NOT NULL,
                 main_sector_id INT,
                 sub_sector_id INT,
-                email VARCHAR(255) UNIQUE,
+                email TEXT,
                 website VARCHAR(255),
                 city VARCHAR(100),
                 district VARCHAR(100),
@@ -118,7 +118,8 @@ async function setupDatabase() {
                 last_mail_at DATETIME,
                 status VARCHAR(50) DEFAULT 'New Lead',
                 notes TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE INDEX unique_website (website)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         `);
 
@@ -129,7 +130,13 @@ async function setupDatabase() {
         try { await connection.execute('ALTER TABLE customers ADD COLUMN last_mail_at DATETIME AFTER authorized_person'); } catch (e) { }
         try { await connection.execute("ALTER TABLE customers ADD COLUMN status VARCHAR(50) DEFAULT 'New Lead' AFTER last_mail_at"); } catch (e) { }
         try { await connection.execute('ALTER TABLE customers ADD COLUMN notes TEXT AFTER status'); } catch (e) { }
-        try { await connection.execute('ALTER TABLE customers ADD UNIQUE INDEX unique_email (email)'); } catch (e) { }
+        
+        // Convert email to TEXT and remove old unique constraint
+        try { await connection.execute('ALTER TABLE customers MODIFY COLUMN email TEXT'); } catch (e) { }
+        try { await connection.execute('ALTER TABLE customers DROP INDEX unique_email'); } catch (e) { }
+        try { await connection.execute('ALTER TABLE customers DROP INDEX email'); } catch (e) { }
+        // Add unique index on website for duplicate prevention
+        try { await connection.execute('ALTER TABLE customers ADD UNIQUE INDEX unique_website (website)'); } catch (e) { }
 
         // Optional: Remove old text columns if they exist (safer to keep for now or drop)
         // try { await connection.execute('ALTER TABLE customers DROP COLUMN main_sector'); } catch (e) { }
@@ -380,7 +387,7 @@ app.get('/api/customers', async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const offset = (page - 1) * limit;
 
-    const { city, district, main_sector_id, sub_sector_id, search } = req.query;
+    const { city, district, main_sector_id, sub_sector_id, search, company_name, email, website, status, notes } = req.query;
 
     try {
         const connection = await getDbConnection();
@@ -389,12 +396,12 @@ app.get('/api/customers', async (req, res) => {
         let params = [];
 
         if (city) {
-            whereClauses.push("c.city = ?");
-            params.push(city);
+            whereClauses.push("c.city LIKE ?");
+            params.push(`%${city}%`);
         }
         if (district) {
-            whereClauses.push("c.district = ?");
-            params.push(district);
+            whereClauses.push("c.district LIKE ?");
+            params.push(`%${district}%`);
         }
         if (main_sector_id) {
             whereClauses.push("c.main_sector_id = ?");
@@ -403,6 +410,26 @@ app.get('/api/customers', async (req, res) => {
         if (sub_sector_id) {
             whereClauses.push("c.sub_sector_id = ?");
             params.push(sub_sector_id);
+        }
+        if (company_name) {
+            whereClauses.push("c.company_name LIKE ?");
+            params.push(`%${company_name}%`);
+        }
+        if (email) {
+            whereClauses.push("c.email LIKE ?");
+            params.push(`%${email}%`);
+        }
+        if (website) {
+            whereClauses.push("c.website LIKE ?");
+            params.push(`%${website}%`);
+        }
+        if (status) {
+            whereClauses.push("c.status = ?");
+            params.push(status);
+        }
+        if (notes) {
+            whereClauses.push("c.notes LIKE ?");
+            params.push(`%${notes}%`);
         }
         if (search) {
             whereClauses.push("(c.company_name LIKE ? OR c.email LIKE ? OR c.authorized_person LIKE ? OR c.city LIKE ? OR c.district LIKE ? OR c.website LIKE ?)");
@@ -674,39 +701,70 @@ app.post('/api/customers/bulk', async (req, res) => {
     try {
         const connection = await getDbConnection();
 
-        // Use INSERT IGNORE to skip duplicates (requires UNIQUE constraint on email)
+        // Use INSERT ... ON DUPLICATE KEY UPDATE to append emails
         const query = `
-            INSERT IGNORE INTO customers (
+            INSERT INTO customers (
                 company_name, main_sector_id, sub_sector_id, 
                 main_sector, sector, email, website, 
                 city, district, phone, authorized_person
             ) VALUES ?
+            ON DUPLICATE KEY UPDATE 
+                email = CASE 
+                    WHEN email IS NULL OR email = '' THEN VALUES(email)
+                    WHEN VALUES(email) IS NULL OR VALUES(email) = '' THEN email
+                    ELSE CONCAT(email, ', ', VALUES(email))
+                END,
+                company_name = IF(company_name = 'İsimsiz Şirket' OR company_name IS NULL, VALUES(company_name), company_name)
         `;
 
-        const values = customers.map(c => [
-            c.company_name || 'İsimsiz Şirket',
-            c.main_sector_id || null,
-            c.sub_sector_id || null,
-            c.main_sector || null,
-            c.sector || null,
-            c.email || null,
-            c.website || null,
-            c.city || null,
-            c.district || null,
-            c.phone || null,
-            c.authorized_person || null
-        ]);
+        const values = customers.map(c => {
+            let website = (c.website || '').trim().toLowerCase();
+            if (website.endsWith('/')) website = website.slice(0, -1);
+            
+            return [
+                c.company_name || 'İsimsiz Şirket',
+                c.main_sector_id || null,
+                c.sub_sector_id || null,
+                c.main_sector || null,
+                c.sector || null,
+                c.email || null,
+                website || null,
+                c.city || null,
+                c.district || null,
+                c.phone || null,
+                c.authorized_person || null
+            ];
+        });
 
         const [result] = await connection.query(query, [values]);
         await connection.end();
 
-        // Return how many were actually inserted (skipping duplicates)
+        // result.affectedRows in MySQL with ON DUPLICATE KEY UPDATE:
+        // 1 for insert, 2 for update, 0 for no change
         res.json({
             status: 'success',
-            message: `${result.affectedRows} yeni müşteri eklendi, ${customers.length - result.affectedRows} mükerrer kayıt atlandı.`
+            message: `İşlem tamamlandı. Mükerrer web siteleri için e-postalar güncellendi.`
         });
     } catch (error) {
         console.error('Bulk Insert Error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Clear all customers (Admin)
+app.post('/api/customers/clear', async (req, res) => {
+    const { password } = req.body;
+    if (password !== 'sadesoda2023') {
+        return res.status(401).json({ error: 'Geçersiz şifre.' });
+    }
+
+    try {
+        const connection = await getDbConnection();
+        await connection.execute('TRUNCATE TABLE customers');
+        await connection.end();
+        res.json({ status: 'success', message: 'Tüm müşteri listesi temizlendi.' });
+    } catch (error) {
+        console.error('Clear Error:', error);
         res.status(500).json({ error: error.message });
     }
 });
@@ -754,20 +812,47 @@ app.post('/api/verify-websites', async (req, res) => {
     const verificationResults = await Promise.all(companies.map(async (company) => {
         if (!company.website) return { ...company, isLive: false };
 
-        // Ensure URL has protocol
         let url = company.website;
         if (!url.startsWith('http')) url = 'http://' + url;
 
         try {
-            // Fast check with HEAD or GET request and 5s timeout
             const response = await axios.get(url, {
-                timeout: 5000,
+                timeout: 8000, // Slightly longer timeout for deep check
                 headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36' },
-                validateStatus: (status) => status < 400 // Accept only 2xx or 3xx
+                validateStatus: (status) => status < 400
             });
-            return { ...company, website: url, isLive: true };
+
+            const html = (response.data || '').toString().toLowerCase();
+            const titleMatch = html.match(/<title>(.*?)<\/title>/);
+            const title = titleMatch ? titleMatch[1].toLowerCase() : '';
+
+            // Check for parked domain or default hosting pages
+            const parkedKeywords = [
+                'parked', 'domain for sale', 'buy this domain', 'hosting default page', 
+                'plesk default', 'cpanel default', 'under construction', 'coming soon',
+                'sedo', 'godaddy default', 'satılık alan adı', 'yakında hizmetinizde'
+            ];
+
+            const isParked = parkedKeywords.some(keyword => html.includes(keyword) || title.includes(keyword));
+            
+            // Check for very empty pages
+            const isTooEmpty = html.length < 500;
+
+            // Optional: More specific verification
+            // Check if company name (partial) appears in title or content
+            const simpleCompanyName = company.company_name.toLowerCase().split(' ')[0];
+            const nameMentioned = html.includes(simpleCompanyName) || title.includes(simpleCompanyName);
+
+            // 100% confidence logic: Status ok, not parked, has reasonable content length
+            // We relaxed nameMentioned slightly because some companies have different brand names on web
+            if (!isParked && !isTooEmpty) {
+                return { ...company, website: url, isLive: true };
+            }
+            
+            console.log(`Verification failed (Quality): ${url} - Parked: ${isParked}, TooEmpty: ${isTooEmpty}`);
+            return { ...company, isLive: false };
         } catch (error) {
-            console.log(`Verification failed for ${url}: ${error.code || error.message}`);
+            console.log(`Verification failed (Connect): ${url} - ${error.code || error.message}`);
             return { ...company, isLive: false };
         }
     }));
