@@ -566,7 +566,8 @@ app.get('/api/auth/google/url', (req, res) => {
         access_type: 'offline',
         scope: [
             'https://www.googleapis.com/auth/gmail.send',
-            'https://www.googleapis.com/auth/userinfo.email'
+            'https://www.googleapis.com/auth/userinfo.email',
+            'https://www.googleapis.com/auth/gmail.settings.basic'
         ],
         prompt: 'consent', // Force refresh token
         state: redirectUri // Pass the redirectUri back via state
@@ -661,6 +662,19 @@ app.post('/api/auth/google/logout', (req, res) => {
     }
 });
 
+// Helper to get Gmail Signature
+async function getGmailSignature(auth) {
+    try {
+        const gmail = google.gmail({ version: 'v1', auth });
+        const res = await gmail.users.settings.sendAs.list({ userId: 'me' });
+        const primary = res.data.sendAs?.find(account => account.isPrimary);
+        return primary ? primary.signature : '';
+    } catch (err) {
+        console.error('[GmailSignature] Error fetching signature:', err);
+        return '';
+    }
+}
+
 // Real Email Sending Endpoint
 app.post('/api/send-email', async (req, res) => {
     const { to, subject, html, customerId } = req.body;
@@ -674,7 +688,10 @@ app.post('/api/send-email', async (req, res) => {
 
         // Try Gmail API if authenticated
         if (oauth2Client.credentials && oauth2Client.credentials.refresh_token) {
+            const signature = await getGmailSignature(oauth2Client);
+            const fullHtml = signature ? `${html}<br><br>${signature}` : html;
             const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+
             const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
             const messageParts = [
                 `To: ${to}`,
@@ -682,7 +699,7 @@ app.post('/api/send-email', async (req, res) => {
                 'MIME-Version: 1.0',
                 `Subject: ${utf8Subject}`,
                 '',
-                html,
+                fullHtml,
             ];
             const message = messageParts.join('\n');
             const encodedMessage = Buffer.from(message)
