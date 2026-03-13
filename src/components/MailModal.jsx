@@ -41,7 +41,8 @@ const MailModal = ({ customer, onClose, onMailSent, subSectors = [] }) => {
 
         setSending(true);
         try {
-            const formattedHtml = mailContent
+            // Convert '*' at the beginning of lines to <li> items
+            let formattedHtml = mailContent
                 .split('\n')
                 .map(line => {
                     const trimmed = line.trim();
@@ -50,9 +51,15 @@ const MailModal = ({ customer, onClose, onMailSent, subSectors = [] }) => {
                     }
                     return line;
                 })
-                .join('\n')
-                .replace(/(<li>.*?<\/li>(\n|))+/g, match => `<ul>${match}</ul>`)
-                .replace(/\n/g, '<br>');
+                .join('\n');
+
+            // Wrap consecutive <li> items in <ul> tags
+            formattedHtml = formattedHtml.replace(/(<li>.*?<\/li>(\s*\n\s*)*)+/g, match => {
+                return `<ul>${match}</ul>`;
+            });
+
+            // Convert remaining newlines to <br>
+            formattedHtml = formattedHtml.replace(/\n/g, '<br>');
 
             const resp = await fetch(`${API_BASE}/send-email`, {
                 method: 'POST',
