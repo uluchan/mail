@@ -136,16 +136,27 @@ function App() {
   const handleGoogleLogin = async () => {
     try {
       const currentOrigin = window.location.origin;
-      const redirectUri = currentOrigin.includes('localhost')
-        ? 'http://localhost:3001/api/auth/google/callback'
-        : `${currentOrigin}/api/auth/google/callback`;
+      const redirectUri = 'http://localhost:3001/api/auth/google/callback';
 
-      const resp = await fetch(`${API_BASE}/auth/google/url?redirectUri=${encodeURIComponent(redirectUri)}`)
-      const { url } = await resp.json()
+      // 1. Open popup immediately to prevent popup blocker
       const width = 600, height = 700;
       const left = (window.innerWidth / 2) - (width / 2);
       const top = (window.innerHeight / 2) - (height / 2);
-      const authWindow = window.open(url, 'Google Login', `width=${width},height=${height},left=${left},top=${top}`);
+      const authWindow = window.open('about:blank', 'Google Login', `width=${width},height=${height},left=${left},top=${top}`);
+      
+      if (authWindow) {
+        authWindow.document.write('<div style="font-family:sans-serif;text-align:center;margin-top:50px;"><h2>Google\'a Bağlanılıyor...</h2><p>Lütfen bekleyin...</p></div>');
+      } else {
+        alert("Lütfen tarayıcınızın pop-up engelleyicisini kapatın.");
+        return;
+      }
+
+      // 2. Fetch the actual URL
+      const resp = await fetch(`${API_BASE}/auth/google/url?redirectUri=${encodeURIComponent(redirectUri)}`)
+      const { url } = await resp.json()
+      
+      // 3. Update popup URL
+      authWindow.location.href = url;
 
       const checkInterval = setInterval(() => {
         if (authWindow.closed) {
@@ -705,12 +716,23 @@ function App() {
           : finalSectorName;
 
         const varietySeed = Math.floor(Math.random() * 10000);
-        let prompt = `${locationText} "${sectorQuery}" alanında faaliyet gösteren bulabildiğin kadar çok gerçek şirketi bul (Maksimum 50 adet). 
-        KRİTİK: Sadece gerçek e-posta adreslerini yaz. Uydurma veya placeholder (@email.com, @test.com vb.) adresleri KESİNLİKLE yazma. 
-        Eğer şirketin gerçek e-postası yoksa o şirketi listeye ekleme.
-        Eğer şirketin birden fazla e-posta adresi (genel, satış, yetkili, personel vb.) varsa, tümünü "email" alanında virgülle ayırarak yaz.
+        let prompt = `${locationText} "${sectorQuery}" alanında faaliyet gösteren KOBİ ölçeğindeki gerçek şirketleri bul (Maksimum 50 adet). 
+        KOBİ KRİTERLERİ — Aşağıdaki özelliklere uyan şirketleri getir:
+        - Çalışan sayısı tahminen 10 ile 200 arasında
+        - Bölgesel veya yerel ölçekte faaliyet gösteren (ulusal zincir veya holding değil)
+        - SAP, Oracle gibi kurumsal ERP sistemi kullanmayan, süreçlerini büyük ihtimalle Excel/manuel yürüten
+        - LinkedIn takipçi sayısı 10.000'in altında olan (büyük marka veya kurumsal firma değil)
+        - Kurucusu veya operasyon müdürü hâlâ aktif olarak işin içinde olan
+
+        KESİNLİKLE ÇIKAR:
+        - 200'den fazla çalışanı olan firmalar
+        - Holding veya büyük grup şirketleri (Sabancı, Koç, Alarko vb. bağlı firmalar dahil)
+        - Ulusal zincirler veya franchise yapılar
+        - Halka açık (borsada işlem gören) şirketler
+
+        KRİTİK E-POSTA KURALI: Sadece gerçek e-posta adreslerini yaz. Uydurma veya placeholder (@email.com, @test.com vb.) adresleri KESİNLİKLE yazma. Eğer şirketin gerçek e-postası yoksa o şirketi listeye ekleme. Eğer şirketin birden fazla e-posta adresi (genel, satış, yetkili, personel vb.) varsa, tümünü 'email' alanında virgülle ayırarak yaz.
         
-        ÇEŞİTLİLİK NOTU (Seed: ${varietySeed}): Daha önce verdiğin benzer sonuçlardan farklı, daha az bilinen, orta ölçekli veya spesifik firmalara odaklan. Alfabetik veya popülerlik sırasına göre değil, daha geniş bir yelpazeden sonuç ver.
+        ÇEŞİTLİLİK NOTU (Seed: ${varietySeed}): Alfabetik veya popülerlik sırasına göre değil, daha geniş bir yelpazeden (niş alanlar dahil) farklı KOBİ'ler sun.
         
         Veri formatı (Sadece JSON listesi):
         [
