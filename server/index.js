@@ -576,7 +576,17 @@ app.get('/api/auth/google/url', (req, res) => {
 app.get('/api/auth/google/callback', async (req, res) => {
     const { code } = req.query;
     try {
+        if (!code) throw new Error('Auth code missing from callback.');
+
+        // Detect current redirect URI based on how the request reached us
+        const protocol = req.headers['x-forwarded-proto'] || 'http';
+        const host = req.headers['host'];
+        const currentRedirectUri = `${protocol}://${host}/api/auth/google/callback`;
+
+        console.log(`[GoogleAuth] Callback received. Guessing Redirect URI: ${currentRedirectUri}`);
+
         const possibleUris = [
+            currentRedirectUri,
             process.env.GOOGLE_REDIRECT_URI,
             'http://localhost:3001/api/auth/google/callback',
             'https://mail-git-main-uluchan-4854s-projects.vercel.app/api/auth/google/callback'
@@ -587,6 +597,7 @@ app.get('/api/auth/google/callback', async (req, res) => {
 
         for (const uri of possibleUris) {
             try {
+                console.log(`[GoogleAuth] Attempting getToken with URI: ${uri}`);
                 const tempClient = new google.auth.OAuth2(
                     process.env.GOOGLE_CLIENT_ID,
                     process.env.GOOGLE_CLIENT_SECRET,
@@ -594,20 +605,31 @@ app.get('/api/auth/google/callback', async (req, res) => {
                 );
                 const { tokens: t } = await tempClient.getToken(code);
                 tokens = t;
+                console.log(`[GoogleAuth] Success with URI: ${uri}`);
                 break;
             } catch (e) {
+                console.error(`[GoogleAuth] Failed with URI: ${uri}. Error: ${e.message}`);
                 lastError = e;
             }
         }
 
-        if (!tokens) throw lastError || new Error('Token alınamadı.');
+        if (!tokens) {
+            throw new Error(`Token alınamadı. Son denenen hata: ${lastError?.message || 'Bilinmiyor'}`);
+        }
 
         oauth2Client.setCredentials(tokens);
-        fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens));
+        
+        // Note: On ephemeral environments like Vercel, this won't persist
+        try {
+            fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens));
+        } catch (fsErr) {
+            console.warn('[GoogleAuth] Token saved to memory but file save failed:', fsErr.message);
+        }
+
         res.send('<h1>Başarıyla bağlandı!</h1><p>Şimdi uygulamaya geri dönebilirsiniz. Bu pencereyi kapatabilirsiniz.</p><script>window.close()</script>');
     } catch (error) {
         console.error('Callback error:', error);
-        res.status(500).send('Bağlantı sırasında hata oluştu.');
+        res.status(500).send(`Bağlantı sırasında hata oluştu: ${error.message}`);
     }
 });
 
