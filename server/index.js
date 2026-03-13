@@ -568,29 +568,31 @@ app.get('/api/auth/google/url', (req, res) => {
             'https://www.googleapis.com/auth/gmail.send',
             'https://www.googleapis.com/auth/userinfo.email'
         ],
-        prompt: 'consent' // Force refresh token
+        prompt: 'consent', // Force refresh token
+        state: redirectUri // Pass the redirectUri back via state
     });
     res.json({ url });
 });
 
 app.get('/api/auth/google/callback', async (req, res) => {
-    const { code } = req.query;
+    const { code, state: redirectUriFromState } = req.query;
     try {
         if (!code) throw new Error('Auth code missing from callback.');
 
-        // Detect current redirect URI based on how the request reached us
+        // 1. Prioritize state (it should contain the exactly correct URI)
+        // 2. Fallback to guestimates
         const protocol = req.headers['x-forwarded-proto'] || 'http';
         const host = req.headers['host'];
-        const currentRedirectUri = `${protocol}://${host}/api/auth/google/callback`;
-
-        console.log(`[GoogleAuth] Callback received. Guessing Redirect URI: ${currentRedirectUri}`);
+        const guessedUri = `${protocol}://${host}/api/auth/google/callback`;
 
         const possibleUris = [
-            currentRedirectUri,
+            redirectUriFromState,
+            guessedUri,
             process.env.GOOGLE_REDIRECT_URI,
-            'http://localhost:3001/api/auth/google/callback',
-            'https://mail-git-main-uluchan-4854s-projects.vercel.app/api/auth/google/callback'
+            'http://localhost:3001/api/auth/google/callback'
         ].filter(Boolean);
+
+        console.log(`[GoogleAuth] Callback with state: ${redirectUriFromState}. Guessed: ${guessedUri}`);
 
         let tokens = null;
         let lastError = null;
