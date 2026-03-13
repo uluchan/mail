@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Plus, Trash2, ChevronRight, Edit3, Save, Layout } from 'lucide-react';
+import { X, Plus, Trash2, ChevronRight, Edit3, Save, Layout, CheckCircle, Filter } from 'lucide-react';
 import { API_BASE } from '../apiConfig';
 import './SectorManagementModal.css';
 
@@ -11,6 +11,7 @@ const SectorManagementModal = ({ onClose }) => {
     // Sub-sector editing state
     const [editingSub, setEditingSub] = useState(null)
     const [subFormData, setSubFormData] = useState({ name: '', mail_subject: '', mail_template: '' })
+    const [showOnlyEmpty, setShowOnlyEmpty] = useState(false)
 
     useEffect(() => {
         fetchSectors()
@@ -220,6 +221,13 @@ const SectorManagementModal = ({ onClose }) => {
                                 İçe Aktar (Excel)
                                 <input type="file" accept=".xlsx, .xls" onChange={handleImport} hidden />
                             </label>
+                            <button 
+                                className={`util-btn ${showOnlyEmpty ? 'active-filter' : ''}`} 
+                                onClick={() => setShowOnlyEmpty(!showOnlyEmpty)}
+                                title="Sadece şablonu boş olanları göster"
+                            >
+                                <Filter size={14} /> {showOnlyEmpty ? 'Tümünü Göster' : 'Boş Şablonlar'}
+                            </button>
                         </div>
                     </div>
                     <button className="close-button" onClick={onClose}><X size={20} /></button>
@@ -241,7 +249,16 @@ const SectorManagementModal = ({ onClose }) => {
                             </div>
                         </div>
                         <div className="sectors-list scrollable">
-                            {Array.isArray(sectors) && sectors.map(m => (
+                            {sectors
+                                .map(m => {
+                                    const filteredSubs = m.sub_sectors.filter(s => 
+                                        !showOnlyEmpty || (!s.mail_subject || !s.mail_template)
+                                    );
+                                    if (filteredSubs.length === 0 && showOnlyEmpty) return null;
+                                    return { ...m, sub_sectors: filteredSubs };
+                                })
+                                .filter(Boolean)
+                                .map(m => (
                                 <div key={m.id} className="main-sector-card">
                                     <div className="card-top">
                                         <strong>{m.name}</strong>
@@ -255,22 +272,28 @@ const SectorManagementModal = ({ onClose }) => {
                                         </div>
                                     </div>
                                     <div className="sub-sectors-list">
-                                        {Array.isArray(m.sub_sectors) && m.sub_sectors.map(s => (
-                                            <div
-                                                key={s.id}
-                                                className={`sub-sector-item ${editingSub?.id === s.id ? 'active' : ''}`}
-                                                onClick={() => startEditSub(s)}
-                                            >
-                                                <div className="item-info">
-                                                    <ChevronRight size={14} className="folder-icon" />
-                                                    <span>{s.name}</span>
+                                        {m.sub_sectors.map(s => {
+                                            const isComplete = s.mail_subject && s.mail_template;
+                                            return (
+                                                <div
+                                                    key={s.id}
+                                                    className={`sub-sector-item ${editingSub?.id === s.id ? 'active' : ''}`}
+                                                    onClick={() => startEditSub(s)}
+                                                >
+                                                    <div className="item-info">
+                                                        <ChevronRight size={14} className="folder-icon" />
+                                                        <span>{s.name}</span>
+                                                        {isComplete && (
+                                                            <CheckCircle size={14} className="complete-icon" title="Şablon dolu" />
+                                                        )}
+                                                    </div>
+                                                    <button className="item-delete" onClick={(e) => { e.stopPropagation(); deleteSubSector(s.id); }}>
+                                                        <X size={14} />
+                                                    </button>
                                                 </div>
-                                                <button className="item-delete" onClick={(e) => { e.stopPropagation(); deleteSubSector(s.id); }}>
-                                                    <X size={14} />
-                                                </button>
-                                            </div>
-                                        ))}
-                                        {Array.isArray(m.sub_sectors) && m.sub_sectors.length === 0 && (
+                                            );
+                                        })}
+                                        {m.sub_sectors.length === 0 && (
                                             <p className="no-sub-text">Henüz alt sektör eklenmedi.</p>
                                         )}
                                     </div>

@@ -41,13 +41,26 @@ const MailModal = ({ customer, onClose, onMailSent, subSectors = [] }) => {
 
         setSending(true);
         try {
+            const formattedHtml = mailContent
+                .split('\n')
+                .map(line => {
+                    const trimmed = line.trim();
+                    if (trimmed.startsWith('*')) {
+                        return `<li>${trimmed.substring(1).trim()}</li>`;
+                    }
+                    return line;
+                })
+                .join('\n')
+                .replace(/(<li>.*?<\/li>(\n|))+/g, match => `<ul>${match}</ul>`)
+                .replace(/\n/g, '<br>');
+
             const resp = await fetch(`${API_BASE}/send-email`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     to: customer.email,
                     subject: subject,
-                    html: mailContent.replace(/\n/g, '<br>'), // Simple newline to break conversion
+                    html: formattedHtml,
                     customerId: customer.id
                 })
             });
@@ -55,6 +68,17 @@ const MailModal = ({ customer, onClose, onMailSent, subSectors = [] }) => {
             const data = await resp.json();
 
             if (resp.ok) {
+                // Update customer status locally before closing
+                try {
+                    await fetch(`${API_BASE}/customers/${customer.id}/status`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ status: 'Contacted Mail' })
+                    });
+                } catch (statusErr) {
+                    console.error('Status update failed:', statusErr);
+                }
+
                 alert('E-posta başarıyla gönderildi!');
                 if (onMailSent) onMailSent();
                 onClose();

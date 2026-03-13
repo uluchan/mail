@@ -461,6 +461,22 @@
     }
 }
 
+.util-btn.active-filter {
+    background: var(--black);
+    color: var(--neon);
+    border-color: var(--black);
+}
+
+.complete-icon {
+    color: #2ecc71;
+    margin-left: auto;
+    margin-right: 8px;
+}
+
+.sub-sector-item.active .complete-icon {
+    color: var(--neon);
+}
+
 .scrollable::-webkit-scrollbar {
     width: 6px;
 }
